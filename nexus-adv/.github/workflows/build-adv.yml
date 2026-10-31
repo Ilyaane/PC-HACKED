@@ -1,0 +1,47 @@
+name: NEXUS Cardputer ADV - validate and compile
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'firmware/**'
+      - 'cloudflare/**'
+      - 'tests/**'
+      - '.github/workflows/build-adv.yml'
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test Cloudflare server
+        run: node --test cloudflare/tests/worker.test.mjs
+      - name: Check package source invariants
+        run: python tests/static_checks.py
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade 'platformio==6.1.18'
+      - name: Build Cardputer ADV
+        working-directory: firmware
+        run: pio run -e cardputer-adv
+      - name: Check built binary header and size
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('firmware/.pio/build/cardputer-adv/firmware.bin')
+          assert p.exists(), 'PlatformIO did not produce firmware.bin'
+          b=p.read_bytes()
+          assert len(b)>10000, 'Unexpectedly small firmware'
+          assert len(b)<=0x330000, 'Firmware exceeds first 8MB app partition (0x330000)'
+          assert b[0]==0xE9, 'Invalid ESP32 image magic'
+          print('Firmware image present; bytes:',len(b))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NEXUS-ADV-compiled-not-hardware-tested
+          path: firmware/.pio/build/cardputer-adv/firmware.bin
+          if-no-files-found: error
+          retention-days: 14
