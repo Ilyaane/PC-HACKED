@@ -126,7 +126,7 @@ void loadHistory(){
 bool remember(uint32_t id,String sender,String kind,String text){
   text.replace("\n"," ");text.replace("\r"," ");text.replace("|","/");
   if(historySize==8){for(int i=1;i<8;i++)history[i-1]=history[i];historySize--;}
-  history[historySize++]={id,sender,kind,text};
+  History& h=history[historySize++];h.id=id;h.sender=sender;h.kind=kind;h.body=text;
   if(!sdReady)return true; // RAM-only session: do not persist a cursor on flash.
   File f=SD.open(HISTORY,FILE_APPEND);
   if(!f) return false;
@@ -408,7 +408,11 @@ void playVoice(){
 void handleInput(){
   if(!(M5Cardputer.Keyboard.isChange()&&M5Cardputer.Keyboard.isPressed()))return;
   const auto k=M5Cardputer.Keyboard.keysState();
-  if(k.esc){
+  // M5Cardputer 1.1.1 exposes no esc/up/down members: use Fn+` / Fn+; / Fn+.
+  const bool escPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('`');
+  const bool upPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed(';');
+  const bool downPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('.');
+  if(escPressed){
     if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST) {
       // Cancel a change without losing the saved Wi-Fi settings in RAM.
       wifiSsid=prefs.getString("ssid","");wifiPass=prefs.getString("pwd","");
@@ -435,10 +439,10 @@ void handleInput(){
   }}return;}
   if(view==View::WIFI_PASSWORD||view==View::EDIT_URL||view==View::EDIT_TOKEN||view==View::EDIT_PEER||view==View::COMPOSE){
     String& target=(view==View::COMPOSE)?editor:input;
-    if(k.del||k.backspace){if(target.length())target.remove(target.length()-1);}
+    if(k.del){if(target.length())target.remove(target.length()-1);}
     bool edited=false;
     for(char ch:k.word){if(ch>=32&&ch<=126&&target.length()<((view==View::COMPOSE)?600:160)){target+=ch;edited=true;}}
-    if(view==View::COMPOSE && (edited||k.del||k.backspace) && pendingTextId.length()){
+    if(view==View::COMPOSE && (edited||k.del) && pendingTextId.length()){
       // A modified draft is a new message, not a retry of the previous request.
       pendingTextId="";prefs.remove("txtid");
     }
@@ -456,8 +460,8 @@ void handleInput(){
   }
   if(view==View::HISTORY){
     bool changed=false;
-    if(k.up&&pageHistory+1<historySize){pageHistory++;textPage=0;changed=true;}
-    if(k.down&&pageHistory>0){pageHistory--;textPage=0;changed=true;}
+    if(upPressed&&pageHistory+1<historySize){pageHistory++;textPage=0;changed=true;}
+    if(downPressed&&pageHistory>0){pageHistory--;textPage=0;changed=true;}
     if(historySize){
       int i=historySize-1-pageHistory;
       if(history[i].kind=="text") for(char ch:k.word){
