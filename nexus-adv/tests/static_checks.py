@@ -26,7 +26,7 @@ checks={
  'No insecure TLS': 'setInsecure' not in cpp and 'setInsecure' not in worker,
  'HTTP timeouts': 'http.setTimeout(' in cpp and 'http.setConnectTimeout(' in cpp,
  'NTP time sync': 'configTime(' in cpp,
- 'Text paged, not clipped when stored': 'history[historySize++]={id,sender,kind,text};' in cpp,
+ 'Text paged, not clipped when stored': 'h.id=id;h.sender=sender;h.kind=kind;h.body=text;' in cpp,
  'Send draft persisted': 'prefs.putString("draft",editor)' in cpp,
  'Read acknowledgment': '/read' in cpp and 'acknowledgeMessage' in cpp,
  'Sent status screen': 'case View::SENT' in cpp and 'refreshSent()' in cpp,
