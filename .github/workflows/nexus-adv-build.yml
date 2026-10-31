@@ -39,9 +39,27 @@ jobs:
           assert data[0]==0xE9, 'bad ESP32 image magic'
           print('Verified image header, size:',len(data))
           PY
+      - name: Create standalone factory-flash image
+        run: |
+          python "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" --chip esp32s3 merge_bin \
+            -o nexus-adv/firmware/.pio/build/cardputer-adv/NEXUS_ADV_full_flash_0x0.bin \
+            --flash_mode qio --flash_freq 80m --flash_size 8MB \
+            0x0 nexus-adv/firmware/.pio/build/cardputer-adv/bootloader.bin \
+            0x8000 nexus-adv/firmware/.pio/build/cardputer-adv/partitions.bin \
+            0xe000 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
+            0x10000 nexus-adv/firmware/.pio/build/cardputer-adv/firmware.bin
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('nexus-adv/firmware/.pio/build/cardputer-adv/NEXUS_ADV_full_flash_0x0.bin')
+          b=p.read_bytes()
+          assert b[0]==0xE9 and len(b)>1_000_000 and len(b)<=8*1024*1024
+          print('Standalone flash image:', len(b), 'bytes')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: NEXUS-Cardputer-ADV-unverified-on-device
-          path: nexus-adv/firmware/.pio/build/cardputer-adv/firmware.bin
+          path: |
+            nexus-adv/firmware/.pio/build/cardputer-adv/firmware.bin
+            nexus-adv/firmware/.pio/build/cardputer-adv/NEXUS_ADV_full_flash_0x0.bin
           if-no-files-found: error
           retention-days: 14
