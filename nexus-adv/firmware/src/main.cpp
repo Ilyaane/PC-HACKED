@@ -161,6 +161,16 @@ void paint(){
  }
 }
 void changeView(View v){view=v;paint();}
+bool saveSetting(const char* key, const String& value){
+  if(!prefsReady){storageFault=true;setStatus("MEMOIRE NVS indisponible");return false;}
+  prefs.putString(key,value);
+  // Preferences write can fail when NVS partition is corrupted/full or missing;
+  // do not claim success before an immediate readback.
+  if(prefs.getString(key, String("__NVS_NOT_FOUND__")) != value){
+    storageFault=true;setStatus("ERREUR NVS: reglage non sauvegarde");return false;
+  }
+  return true;
+}
 String wifiKey(int slot,char type){return String("w")+type+String(slot);}
 int wifiSlot(const String& ssid){
   if(ssid.isEmpty())return -1;
@@ -168,8 +178,8 @@ int wifiSlot(const String& ssid){
     if(prefs.getString(wifiKey(i,'s').c_str(),"")==ssid)return i;
   return -1;
 }
-void rememberNetwork(const String& ssid,const String& pass){
-  if(ssid.isEmpty())return;
+bool rememberNetwork(const String& ssid,const String& pass){
+  if(ssid.isEmpty() || !prefsReady)return false;
   int slot=wifiSlot(ssid);
   if(slot<0){
     slot=-1;
@@ -177,8 +187,12 @@ void rememberNetwork(const String& ssid,const String& pass){
       if(prefs.getString(wifiKey(i,'s').c_str(),"").isEmpty()){slot=i;break;}
     if(slot<0)slot=0; // bounded replacement when all five slots are used
   }
-  prefs.putString(wifiKey(slot,'s').c_str(),ssid);
-  prefs.putString(wifiKey(slot,'p').c_str(),pass);
+  const String passKey=wifiKey(slot,'p');
+  const String ssidKey=wifiKey(slot,'s');
+  // Write password first, SSID last, to avoid labeling incomplete credentials saved.
+  const bool passOk=saveSetting(passKey.c_str(),pass);
+  const bool ssidOk=passOk && saveSetting(ssidKey.c_str(),ssid);
+  return passOk && ssidOk;
 }
 void forgetNetwork(const String& ssid){
   const int slot=wifiSlot(ssid);
@@ -187,7 +201,8 @@ void forgetNetwork(const String& ssid){
 
 String nonce(){char buf[25]; snprintf(buf,sizeof(buf),"%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());return String(buf);}
 void loadSettings(){
-  prefs.begin("nexusadv",false);
+  prefsReady=prefs.begin("nexusadv",false);
+  if(!prefsReady){storageFault=true;setStatus("NVS KO: verifier partition flash");return;}
   wifiSsid=prefs.getString("ssid",""); wifiPass=prefs.getString("pwd","");
   if(!wifiSsid.isEmpty() && wifiSlot(wifiSsid)<0)rememberNetwork(wifiSsid,wifiPass); // migrate old NVS
   serverUrl=prefs.getString("server",""); deviceToken=prefs.getString("token","");
@@ -246,7 +261,9 @@ bool connectRememberedWiFi(){
     if(ssid.isEmpty()||ssid==previousSsid)continue;
     wifiSsid=ssid;wifiPass=prefs.getString(wifiKey(slot,'p').c_str(),"");
     if(connectSaved()){
-      prefs.putString("ssid",wifiSsid);prefs.putString("pwd",wifiPass);
+      if(!saveSetting("pwd",wifiPass) || !saveSetting("ssid",wifiSsid)){
+        setStatus("Wi-Fi OK, mais non memorise: NVS KO");
+      }
       return true;
     }
   }
@@ -312,7 +329,11 @@ void storeWiFiAfterTest(const String& newPass){
   const String oldPass=prefs.getString("pwd","");
   wifiPass=pass;
   if(connectSaved()){
-    prefs.putString("ssid",ssid);prefs.putString("pwd",pass);rememberNetwork(ssid,pass);
+    const bool saved=saveSetting("pwd",pass) && saveSetting("ssid",ssid) && rememberNetwork(ssid,pass);
+    if(!saved){
+      setStatus("Wi-Fi connecte, ENREGISTREMENT NVS KO");
+      changeView(View::HOME);return;
+    }
     const bool hasServer=serverTest();
     setStatus(hasServer ? "Wi-Fi et serveur OK" : "Wi-Fi OK / serveur indisponible");
     changeView(View::HOME);
@@ -647,20 +668,25 @@ void handleInput(){
           setStatus("HTTPS obligatoire");
         }else{
           while(input.endsWith("/"))input.remove(input.length()-1);
-          serverUrl=input;prefs.putString("server",serverUrl);
-          serverReady=false;setStatus("Adresse enregistree");changeView(View::CONFIG);return;
+          if(!saveSetting("server",input)){paint();return;}
+          serverUrl=input;serverReady=false;setStatus("Adresse sauvegardee");
+          changeView(View::CONFIG);return;
         }
       }
       if(view==View::EDIT_TOKEN){
         if(input.length()<10){setStatus("Jeton trop court (10 min)");}
-        else{deviceToken=input;prefs.putString("token",deviceToken);
-          serverReady=false;input="";setStatus("Jeton enregistre");
+        else{
+          if(!saveSetting("token",input)){paint();return;}
+          deviceToken=input;serverReady=false;input="";setStatus("Jeton sauvegarde");
           changeView(View::CONFIG);return;}
       }
       if(view==View::EDIT_PEER){
         input.trim();
         if(input!="alice"&&input!="bob")setStatus("Choisir alice ou bob");
-        else{recipient=input;prefs.putString("peer",recipient);changeView(View::CONFIG);return;}
+        else{
+          if(!saveSetting("peer",input)){paint();return;}
+          recipient=input;serverReady=false;setStatus("Correspondant sauvegarde");
+          changeView(View::CONFIG);return;}
       }
       if(view==View::COMPOSE){sendText();return;}
     }
