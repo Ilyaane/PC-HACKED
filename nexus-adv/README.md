@@ -46,7 +46,11 @@ Les messages sont indexés dans `INDEX.txt`. La liste sur l'appareil affiche les
 
 - **Écrire en Morse** : convertir un texte en points et tirets affichés.
 - **Jouer le Morse** : générer des sons au haut-parleur à partir du texte.
+- **Entraînement auditif** : entendre une lettre Morse aléatoire, saisir la réponse au clavier et voir la correction.
+- **Vitesse réglable** : de 5 à 30 mots/minute, valeur conservée en NVS.
 - **Décoder son du micro (bêta)** : essayer de reconnaître des impulsions sonores de type 880 Hz enregistrées au micro pendant une courte durée. Ce mode est **expérimental** : son efficacité dépend du volume, du bruit ambiant et de la cadence; il ne permet pas de comprendre toutes les sources audio ou les enregistrements quelconques.
+
+Le module Morse s'inspire de fonctionnalités communes aux entraîneurs radioamateur, notamment A1Keyer pour Cardputer ADV, mais l'interface, le code et les sons de NEXUS sont originaux.
 
 Les alphabets A–Z, les chiffres 0–9 et plusieurs signes de ponctuation sont gérés. Les sons sont des créations synthétiques originales, et non de la musique protégée.
 
