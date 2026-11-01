@@ -1,6 +1,6 @@
 # NEXUS Messagerie pour Cardputer ADV
 
-**Version testée en compilation : v0.8. Développement actuel : v0.9-dev.** Ne pas confondre les fichiers déjà installés par M5 Launcher et le code de développement. Aucune nouvelle version n'est déposée automatiquement sur Google Drive.
+**Version candidate : v1.0. Le firmware reste à tester sur les deux Cardputer ADV réels.** Ne pas confondre les fichiers déjà installés par M5 Launcher et le code de développement. Aucune nouvelle version n'est déposée automatiquement sur Google Drive.
 
 ## Accueil et navigation
 
@@ -13,8 +13,22 @@ Les rubriques :
 - **Vocaux :** enregistrer, envoyer, archives microSD, écouter et effacer le brouillon.
 - **Morse :** texte en Morse, son, décodage micro expérimental, entraînement auditif, vitesse.
 - **Wi-Fi :** réseau mémorisé, sélection et diagnostic.
-- **Système :** paramètres, diagnostics, détection microSD.
-- **Autres :** espace microSD, version, emplacement pour futurs outils légers.
+- **Système :** paramètres, diagnostics, **notification sonore activée/désactivée** (réglage conservé en NVS), détection microSD.
+- **Autres :** recherche de messages TXT archivés, diagnostic batterie en millivolts et pourcentage estimé, espace microSD, version.
+
+## Alertes sonores facultatives (v1.0)
+
+Dans **Système → Son notification : ON/OFF**, Entrée active ou coupe le bref signal au haut-parleur lors d'un **nouveau** message non lu. Le choix est conservé dans la mémoire NVS, même sans carte microSD. À l'ouverture, l'appareil synchronise le compteur et évite de faire sonner indéfiniment un même message déjà signalé. Les messages restent accessibles quand le son est désactivé.
+
+## Recherche hors ligne (v1.0)
+
+Dans **Autres → Rechercher dans textes**, taper au moins deux caractères puis Entrée. La recherche ne lit que les fichiers `.txt` archivés sous `/NEXUS/MESSAGES_TEXTE/`, sans envoyer la requête à Internet. Elle n'est pas sensible aux majuscules/minuscules, et parcourt les sous-dossiers d'archives, dans la limite de 12 000 fichiers par recherche pour garder l'appareil réactif. La liste affiche les 24 dernières correspondances retenues ; si une limite est atteinte, le résultat l'indique. Entrée ouvre un message, `,` et `/` changent de page ; OPT revient aux résultats.
+
+## Batterie (v1.0)
+
+Dans **Autres → Batterie**, M5Stack `Power.getBatteryVoltage()` permet d'afficher la **tension en mV**. `Power.getBatteryLevel()` fournit le **pourcentage estimé**, lissé avec les mesures précédentes pour réduire les fluctuations. Entrée actualise. Le Cardputer ADV **ne mesure pas le courant de charge** et ne possède pas de mesure exacte du pourcentage : une valeur 100 % n'est pas une preuve de pleine charge. Comparer les appareils surtout **débranchés**, avec la même version de firmware.
+
+Documentation fabricant : https://docs.m5stack.com/en/arduino/m5cardputer/battery
 
 ## Messages non lus et réception après arrêt
 
@@ -22,7 +36,7 @@ Le Worker Cloudflare conserve les messages même si le Cardputer est éteint. L'
 
 Le Wi-Fi, l'adresse du serveur, le jeton partagé et le destinataire sont enregistrés dans la **NVS interne**, indépendamment de la microSD. Sans microSD, un Cardputer connecté peut recevoir des messages et afficher le compteur, mais **ne garde pas l'historique local après redémarrage**. Il retélécharge les messages depuis le serveur lors de la reconnexion.
 
-## Archive des messages sur microSD (v0.9-dev)
+## Archive des messages sur microSD (v1.0)
 
 Quand une microSD correctement formatée est présente, NEXUS conserve les anciens vocaux et les textes envoyés/reçus dans des dossiers séparés par année, mois, jour, expéditeur et identifiant. Le fichier `/nexus_history.txt` reste compatible avec les anciennes versions pour charger les **24 derniers messages** dans l'interface, tandis que les archives plus anciennes restent sur la carte.
 
@@ -65,3 +79,17 @@ Le projet NEXUS est indépendant de Déclic, des firmwares Gmail/ChatGPT futurs,
 10. Vérifier que M5 Launcher peut conserver et réinstaller les autres firmwares.
 
 GitHub Actions vérifie les tests API, le source statique, la compilation PlatformIO M5Cardputer ADV et les en-têtes des images ESP32. **Ces résultats ne remplacent pas les essais physiques ni les tests de réception Wi-Fi/voix sur les deux appareils.** L'état actuel est développement, pas certification « sans bug ».
+
+
+## Réinstallation complète demandée (attention)
+
+Le fichier **`NEXUS_ADV_full_flash_0x0.bin`** est une image complète prévue pour être écrite à **0x0** avec un outil USB compatible ESP32-S3, **pas à 0x10000** et **pas depuis l'option d'installation normale de M5 Launcher**.
+
+Si l'outil efface entièrement le flash avant installation :
+- L'application et l'ancienne table de partitions sont remplacées ; les paramètres **NVS** sont effacés. Il faudra ressaisir le Wi-Fi, l'adresse HTTPS, le code du serveur et le correspondant Alice/Bob.
+- **M5 Launcher installé en flash peut être remplacé** par NEXUS. Les fichiers `.bin` stockés sur microSD restent physiquement sur la carte, mais sans M5 Launcher ils ne seront plus accessibles de la même manière. Il faudra réinstaller M5 Launcher si tu veux à nouveau passer d'un firmware à l'autre depuis son interface.
+- Toute donnée enregistrée dans les partitions du flash interne peut être perdue. Sauvegarder et retirer la microSD avant les opérations de réinstallation si nécessaire. Préserver au minimum une copie des fichiers, et tester d'abord sur le Cardputer problématique.
+
+**Option préférable si tu souhaites conserver M5 Launcher :** remplacer seulement la version NEXUS installée, en utilisant le fichier d'application `firmware.bin` via le mécanisme de M5 Launcher ; effacer uniquement l'installation de NEXUS si le lanceur le permet. Une réinstallation générale n'est pas une garantie de supprimer les problèmes de batterie ou de sauvegarde NVS.
+
+Les tests automatisés vérifient le code, la compilation, les images ESP32 et les API du serveur, mais **pas** les vrais messages audio, la charge batterie, la relecture des archives ni les interactions clavier sur ton matériel.
