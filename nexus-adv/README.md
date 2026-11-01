@@ -1,81 +1,67 @@
-# NEXUS Messagerie pour Cardputer ADV — v0.8
+# NEXUS Messagerie pour Cardputer ADV
 
-**NEXUS** est une application autonome légère pour M5Stack Cardputer ADV, développée sous PlatformIO / Arduino. La version v0.8 conserve la messagerie texte, la messagerie vocale WAV, le serveur Cloudflare D1, les jetons partagés et le Wi-Fi mémorisé. Elle réorganise complètement les menus, ajoute des archives vocales sur microSD et des outils Morse.
+**Version testée en compilation : v0.8. Développement actuel : v0.9-dev.** Ne pas confondre les fichiers déjà installés par M5 Launcher et le code de développement. Aucune nouvelle version n'est déposée automatiquement sur Google Drive.
 
-## Interface à cinq rubriques
+## Accueil et navigation
 
-L'écran d'accueil a cinq tuiles horizontales avec icônes vectorielles dessinées par le firmware : **Messages**, **Vocaux**, **Morse**, **Wi-Fi** et **Système**.
+NEXUS doit rester un petit firmware indépendant, compatible avec le fonctionnement habituel de M5 Launcher et les autres firmwares stockés sur microSD. L'accueil affiche le nom **NEXUS**, sans numéro de version, avec six tuiles et icônes vectorielles originales : **Messages, Vocaux, Morse, Wi-Fi, Système, Autres**.
 
-- **Accueil :** `,` = gauche, `/` = droite, **Entrée** = ouvrir la rubrique.
-- **Dans les rubriques :** `;` = monter, `.` = descendre, **Entrée** = ouvrir l'action.
-- **Retour :** **OPT**.
-- Ces touches fonctionnent sans Fn **uniquement dans les menus**; dans la saisie texte, la ponctuation conserve sa signification.
-- L'interface est noire, blanche et cyan avec icônes originales et l'en-tête « NEXUS » (le numéro v0.8 apparaît uniquement dans la documentation).
+Sur l'accueil, la touche physique `,` va à gauche, `/` va à droite, et **Entrée** ouvre la rubrique. Dans chaque rubrique, `;` monte, `.` descend et **Entrée** valide. **OPT** revient en arrière. **Fn n'est pas nécessaire dans les menus**, mais ces mêmes caractères restent utilisables dans les champs de saisie. Les tuiles et les sélections sont rafraîchies partiellement pour limiter les clignotements.
 
-La rubrique **Messages** regroupe réception, rédaction et envoi. **Vocaux** regroupe enregistrement, envoi, archives et lecture. **Wi-Fi** gère les réseaux mémorisés. **Système** regroupe configuration, diagnostics et microSD.
+Les rubriques :
+- **Messages :** réception, nouveau message, messages envoyés.
+- **Vocaux :** enregistrer, envoyer, archives microSD, écouter et effacer le brouillon.
+- **Morse :** texte en Morse, son, décodage micro expérimental, entraînement auditif, vitesse.
+- **Wi-Fi :** réseau mémorisé, sélection et diagnostic.
+- **Système :** paramètres, diagnostics, détection microSD.
+- **Autres :** espace microSD, version, emplacement pour futurs outils légers.
 
-## Archives automatiques de messages vocaux reçus
+## Messages non lus et réception après arrêt
 
-À réception de chaque nouveau message vocal, NEXUS télécharge automatiquement son fichier WAV depuis le serveur **sur la microSD**, le valide, puis l'enregistre sans remplacer les vocaux précédents. Les fichiers sont rangés par date (fuseau Réunion UTC+04:00), expéditeur et identifiant.
+Le Worker Cloudflare conserve les messages même si le Cardputer est éteint. L'API authentifiée `GET /unread` renvoie le **nombre de messages non lus** et un aperçu du plus récent, pour le rôle Alice ou Bob. Le firmware de développement actualise ce compteur au démarrage après connexion Wi-Fi, puis environ toutes les 12 secondes. Une pastille et un aperçu apparaissent sur l'accueil. Le compteur est mis à jour après accusé de lecture et sa dernière valeur est gardée en NVS.
 
-Exemple :
+Le Wi-Fi, l'adresse du serveur, le jeton partagé et le destinataire sont enregistrés dans la **NVS interne**, indépendamment de la microSD. Sans microSD, un Cardputer connecté peut recevoir des messages et afficher le compteur, mais **ne garde pas l'historique local après redémarrage**. Il retélécharge les messages depuis le serveur lors de la reconnexion.
+
+## Archive des messages sur microSD (v0.9-dev)
+
+Quand une microSD correctement formatée est présente, NEXUS conserve les anciens vocaux et les textes envoyés/reçus dans des dossiers séparés par année, mois, jour, expéditeur et identifiant. Le fichier `/nexus_history.txt` reste compatible avec les anciennes versions pour charger les **24 derniers messages** dans l'interface, tandis que les archives plus anciennes restent sur la carte.
 
 ```
 /NEXUS/
   MESSAGES_VOCAUX/
     INDEX.txt
-    RECUS/
-      2026/
-        11/
-          01/
-            alice/
-              2026-11-01_13-45-22_alice_ID42.wav
-            bob/
-              2026-11-01_14-01-08_bob_ID43.wav
+    RECUS/2026/11/01/alice/2026-11-01_13-45-22_alice_ID42.wav
+  MESSAGES_TEXTE/
+    RECUS/2026/11/01/alice/2026-11-01_13-46-00_alice_ID43.txt
+    ENVOYES/2026/11/01/bob/2026-11-01_13-47-00_bob_ID44.txt
+/nexus_history.txt
 ```
 
-Les messages sont indexés dans `INDEX.txt`. La liste sur l'appareil affiche les **24 derniers éléments** pour limiter l'usage de RAM; les WAV plus anciens restent sur la carte SD et sont accessibles depuis un ordinateur.
+L'horodatage de classement utilise l'heure du serveur et le fuseau de La Réunion (UTC+04:00). Lorsqu'un téléchargement vocal ou l'écriture d'un texte reçu sur microSD échoue, le curseur de réception n'avance pas : l'application réessaie. La sauvegarde des fichiers s'effectue d'abord sous `.part` avant renommage. Les WAV et TXT ne sont **pas chiffrés** sur la microSD.
 
-- Le téléchargement se fait dans un fichier temporaire `.part`; une validation d'en-tête et de taille précède le renommage final.
-- Si l'enregistrement de la voix échoue (microSD pleine, déconnectée, erreur réseau), NEXUS **ne fait pas avancer le curseur de réception**, ce qui permet une nouvelle tentative plutôt que de perdre le vocal.
-- Le dossier et l'index sont créés automatiquement au premier vocal reçu. Le nom utilise l'heure transmise par le serveur; si celle-ci est invalide, classement sous `DATE_INCONNUE`.
-- Il faut une microSD correctement formatée. Sans microSD, pas d'archive locale vocale.
-- Les WAV sont des fichiers audio ordinaires **non chiffrés sur la carte SD**; protéger la carte si les messages sont privés.
+## Diagnostics et sécurité
 
-## Outils Morse
+La rubrique **Diagnostics** affiche à nouveau Wi-Fi, adresse IP locale, RAM libre (Heap), état du serveur, état NVS, rôle Alice/Bob et nombre de messages non lus. L'écriture des paramètres critiques est vérifiée par une relecture NVS, mais la persistance réelle doit être testée après arrêt et redémarrage.
 
-- **Écrire en Morse** : convertir un texte en points et tirets affichés.
-- **Jouer le Morse** : générer des sons au haut-parleur à partir du texte.
-- **Entraînement auditif** : entendre une lettre Morse aléatoire, saisir la réponse au clavier et voir la correction.
-- **Vitesse réglable** : de 5 à 30 mots/minute, valeur conservée en NVS.
-- **Décoder son du micro (bêta)** : essayer de reconnaître des impulsions sonores de type 880 Hz enregistrées au micro pendant une courte durée. Ce mode est **expérimental** : son efficacité dépend du volume, du bruit ambiant et de la cadence; il ne permet pas de comprendre toutes les sources audio ou les enregistrements quelconques.
+Les deux Cardputer utilisent la même URL : `https://nexus-messagerie.ilyaane-patel1.workers.dev`. En mode code partagé, Alice configure son destinataire `bob` et Bob `alice`. La clé serveur `NEXUS_SHARED_TOKEN` reste dans GitHub Actions. Le rôle transmis par l'appareil n'est pas une deuxième preuve d'authentification. Le code partagé facile à deviner et l'absence de chiffrement de bout en bout ne conviennent pas aux échanges confidentiels.
 
-Le module Morse s'inspire de fonctionnalités communes aux entraîneurs radioamateur, notamment A1Keyer pour Cardputer ADV, mais l'interface, le code et les sons de NEXUS sont originaux.
+## M5 Launcher / WebUI
 
-Les alphabets A–Z, les chiffres 0–9 et plusieurs signes de ponctuation sont gérés. Les sons sont des créations synthétiques originales, et non de la musique protégée.
+Stocker le fichier d'**application** `firmware.bin` dans ton dossier personnel `ADV Nexus` sur microSD et installer normalement via M5 Launcher/WebUI. Ne jamais traiter l'image complète `NEXUS_ADV_full_flash_0x0.bin` comme une simple application. Les partitions et les méthodes de flashage peuvent affecter la NVS. Préserver le Cardputer qui fonctionne et ne pas effacer son flash sans sauvegarde.
 
-## Wi-Fi, paramètres et sécurité
+Le projet NEXUS est indépendant de Déclic, des firmwares Gmail/ChatGPT futurs, de GPS/LoRa et des firmwares HID.
 
-Cinq Wi-Fi peuvent être mémorisés. La reconnexion utilise les mots de passe sauvegardés dans la mémoire NVS interne, pas dans la microSD. La saisie Wi-Fi est visible sans étoiles. Le firmware relit les valeurs critiques après enregistrement pour signaler une erreur NVS.
+## Tests requis pour valider le matériel
 
-Les deux Cardputer utilisent la même adresse : `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Dans le mode partagé :
-- appareil Alice : destinataire `bob`,
-- appareil Bob : destinataire `alice`,
-- le secret de connexion est défini exclusivement dans GitHub Actions comme `NEXUS_SHARED_TOKEN`, jamais dans ce dépôt.
+1. Tuiles gauche/droite puis listes haut/bas, sans Fn ni clignotement gênant.
+2. Saisie Wi-Fi et mot de passe en clair dans l'écran prévu; retour, accents et ponctuation.
+3. Conservation Wi-Fi, URL, code, rôle après deux redémarrages sur **chacun** des Cardputer.
+4. Message Alice → Bob envoyé pendant que Bob est éteint : reconnecter Bob, vérifier la pastille non lue, l'aperçu et le message dans la réception; ensuite vérifier l'accusé de lecture.
+5. Refaire Bob → Alice et tester plusieurs messages arrivés hors ligne.
+6. Avec microSD, vérifier les archives TXT/WAV, noms datés, fichiers complets et relecture après redémarrage.
+7. Sans microSD, vérifier la connexion et le compteur non lu sans plantage.
+8. Morse texte, haut-parleur, quiz et décodage micro expérimental.
+9. Diagnostics IP, RAM, état NVS et serveur.
+10. Vérifier que M5 Launcher peut conserver et réinstaller les autres firmwares.
 
-Un code partagé facile à deviner **n'offre pas une authentification indépendante** entre les deux appareils. La messagerie n'utilise pas de chiffrement de bout en bout.
-
-## M5 Launcher / WebUI : quel fichier utiliser ?
-
-Ce projet est pensé pour fonctionner à côté de Bruce, KVX Puter et des autres firmwares chargés par M5 Launcher sur microSD, sans dépendance à leur code et sans module LoRa ou GPS.
-
-- Dans un dossier de microSD `ADV Nexus`, enregistrer de préférence **`firmware.bin`** (application uniquement) et l'installer par la fonction habituelle de M5 Launcher / WebUI.
-- L'autre fichier, **`NEXUS_ADV_full_flash_0x0.bin`**, comprend chargeur de démarrage, partitions et application; **ne pas le lancer comme une application ordinaire depuis la liste M5 Launcher**. Il sert aux opérations complètes de reflash depuis un outil compatible en mode USB.
-- Ne pas changer la table des partitions ni effacer complètement la mémoire du Cardputer déjà fonctionnel.
-- Selon la table de partitions active et la méthode utilisée par Launcher, le changement de firmware peut affecter les réglages NVS. Vérifier Wi-Fi, code et destinataire après installation et redémarrage.
-
-## Vérifications et limites
-
-Le workflow GitHub `.github/workflows/nexus-adv-build.yml` exécute les tests API Cloudflare, les vérifications statiques du projet, la compilation ESP32-S3 par PlatformIO et les contrôles des images binaires. Un succès de compilation **ne prouve pas** le fonctionnement physique du microphone, du haut-parleur, du comportement d'écran ou de la microSD sur les deux appareils.
-
-Tests matériels à effectuer : menu horizontal/vertical, absence de clignotement, connexion Wi-Fi et préservation NVS sur les deux Cardputer, envoi d'un vocal Alice → Bob, présence de son WAV dans le dossier de la bonne date sur microSD, lecture de l'archive, Morse texte et audio puis décodage expérimental. Déclic et son hébergement Cloudflare Pages sont totalement extérieurs au projet NEXUS.
+GitHub Actions vérifie les tests API, le source statique, la compilation PlatformIO M5Cardputer ADV et les en-têtes des images ESP32. **Ces résultats ne remplacent pas les essais physiques ni les tests de réception Wi-Fi/voix sur les deux appareils.** L'état actuel est développement, pas certification « sans bug ».
