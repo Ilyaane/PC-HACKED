@@ -1174,7 +1174,7 @@ void openSectionSelection(){
     }
   }else{
     if(sectionIndex==0){searchQuery="";input="";changeView(View::SEARCH_EDIT);}
-    else if(sectionIndex==1)changeView(View::BATTERY_INFO);
+    else if(sectionIndex==1){measureBattery();changeView(View::BATTERY_INFO);}
     else changeView(View::STORAGE_INFO);
   }
 }
@@ -1202,17 +1202,19 @@ void handleInput(){
   lastChord=chord;
   const bool editing=(view==View::WIFI_PASSWORD || view==View::EDIT_URL ||
     view==View::EDIT_TOKEN || view==View::EDIT_PEER || view==View::COMPOSE ||
-    view==View::MORSE_EDIT);
+    view==View::MORSE_EDIT || view==View::SEARCH_EDIT);
   // Comma and slash must remain typeable in text, URLs and Wi-Fi passwords.
-  if(escPressed || (leftPressed && !editing && view!=View::HISTORY && view!=View::HOME)){
+  if(escPressed || (leftPressed && !editing && view!=View::HISTORY && view!=View::HOME && view!=View::SEARCH_VIEW)){
     if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST || view==View::WIFI_CONFIRM){
       wifiSsid=prefs.getString("ssid","");wifiPass=prefs.getString("pwd","");
       changeView(View::HOME);
     }else if(view==View::EDIT_URL || view==View::EDIT_TOKEN || view==View::EDIT_PEER){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
-    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN || view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO)
-      changeView(View::SECTION);
+    else if(view==View::SEARCH_VIEW)changeView(View::SEARCH_RESULTS);
+    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN ||
+            view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO || view==View::BATTERY_INFO ||
+            view==View::SEARCH_EDIT || view==View::SEARCH_RESULTS)changeView(View::SECTION);
     else if(view==View::SECTION)changeView(View::HOME);
     else{changeView(View::SECTION);}
     return;
@@ -1258,6 +1260,25 @@ void handleInput(){
       }
       if(moved)paint();
     }
+    return;
+  }
+  if(view==View::BATTERY_INFO){
+    if(k.enter){measureBattery();paint();}
+    return;
+  }
+  if(view==View::SEARCH_RESULTS){
+    bool moved=false;
+    if(searchSize){
+      if(upPressed){searchSelection=(searchSelection+searchSize-1)%searchSize;moved=true;}
+      if(downPressed){searchSelection=(searchSelection+1)%searchSize;moved=true;}
+      if(k.enter||rightPressed){openArchiveText();return;}
+    }
+    if(moved)paint();return;
+  }
+  if(view==View::SEARCH_VIEW){
+    const size_t pages=max((size_t)1,(searchViewBody.length()+92)/93);
+    if(rightPressed && searchPage+1<pages){searchPage++;paint();}
+    else if(leftPressed && searchPage>0){searchPage--;paint();}
     return;
   }
   if(view==View::CONFIG){
@@ -1311,7 +1332,7 @@ void handleInput(){
     return;
   }
   if(view==View::WIFI_PASSWORD||view==View::EDIT_URL||view==View::EDIT_TOKEN||
-     view==View::EDIT_PEER||view==View::COMPOSE||view==View::MORSE_EDIT){
+     view==View::EDIT_PEER||view==View::COMPOSE||view==View::MORSE_EDIT||view==View::SEARCH_EDIT){
     // Fn chords do not type punctuation into passwords or drafts.
     if(k.fn){return;}
     String& target=view==View::COMPOSE?editor:input;
@@ -1319,7 +1340,7 @@ void handleInput(){
     if(erase)target.remove(target.length()-1);
     bool edited=erase;
     for(char ch:k.word){
-      if(ch>=32&&ch<=126&&target.length()<(view==View::COMPOSE?600u:view==View::MORSE_EDIT?70u:160u)){
+      if(ch>=32&&ch<=126&&target.length()<(view==View::COMPOSE?600u:view==View::MORSE_EDIT?70u:view==View::SEARCH_EDIT?48u:160u)){
         target+=ch;edited=true;
       }
     }
@@ -1328,6 +1349,7 @@ void handleInput(){
       persistDraft();
     }
     if(k.enter){
+      if(view==View::SEARCH_EDIT){searchTextArchive();return;}
       if(view==View::MORSE_EDIT){
         morseOutput=NexusMorse::encode(input);
         if(morseOutput.isEmpty())morseOutput="Aucun caractere pris en charge";
