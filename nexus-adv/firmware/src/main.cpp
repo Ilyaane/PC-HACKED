@@ -14,6 +14,8 @@
 #include <SPI.h>
 #include <SD.h>
 #include "ca_roots.h"
+#include "nexus_morse.h"
+#include <math.h>
 
 namespace {
 constexpr uint16_t COL_BG=0x0000, COL_PANEL=0x18C3, COL_ACCENT=0x07FF, COL_TEXT=0xFFFF, COL_MUTED=0xAD55, COL_WARN=0xFBE0;
@@ -770,6 +772,142 @@ void playVoice(){
   }
   f.close();M5Cardputer.Speaker.end();setStatus(ok?"Lecture terminee":"Erreur de lecture");paint();
 }
+
+void playArchiveWav(const String& path){
+  if(!sdReady || !wavFileValid(path)){
+    setStatus("Vocal absent ou fichier WAV invalide");paint();return;
+  }
+  File f=SD.open(path.c_str(),FILE_READ);
+  if(!f){setStatus("Erreur ouverture archive");paint();return;}
+  f.seek(44);M5Cardputer.Mic.end();
+  M5Cardputer.Speaker.setVolume(95);
+  if(!M5Cardputer.Speaker.begin()){f.close();setStatus("Haut-parleur indisponible");paint();return;}
+  setStatus("Lecture archive microSD");paint();
+  alignas(4) int16_t samples[1024];bool ok=true;
+  while(f.available()){
+    size_t bytes=f.read((uint8_t*)samples,sizeof(samples));bytes&=~(size_t)1;
+    if(!bytes)break;
+    if(!M5Cardputer.Speaker.playRaw(samples,bytes/2,AUDIO_RATE,false,1,0)){ok=false;break;}
+    uint32_t t=millis();
+    while(M5Cardputer.Speaker.isPlaying()&&millis()-t<1400)delay(2);
+    if(M5Cardputer.Speaker.isPlaying()){M5Cardputer.Speaker.stop();ok=false;break;}
+  }
+  f.close();M5Cardputer.Speaker.end();
+  setStatus(ok?"Lecture archive terminee":"Erreur lecture microSD");paint();
+}
+void playMorseAudio(const String& encoded){
+  if(encoded.isEmpty()){setStatus("Texte non compatible Morse");return;}
+  M5Cardputer.Mic.end();M5Cardputer.Speaker.setVolume(75);
+  if(!M5Cardputer.Speaker.begin()){setStatus("Haut-parleur indisponible");return;}
+  constexpr uint32_t unit=120; // dot=120ms, dash=360ms, international gaps
+  bool aborted=false;
+  for(size_t i=0;i<encoded.length();i++){
+    const char c=encoded[i];
+    if(c=='.' || c=='-'){
+      const uint32_t duration=(c=='.'?unit:3*unit);
+      if(!M5Cardputer.Speaker.tone(880,duration)){aborted=true;break;}
+      delay(duration+15);
+      M5Cardputer.Speaker.stop();delay(unit);
+    }else if(c=='/'){delay(4*unit);}
+    else if(c==' '){delay(2*unit);}
+    M5Cardputer.update();
+    if(M5Cardputer.Keyboard.keysState().opt){aborted=true;break;}
+  }
+  M5Cardputer.Speaker.end();
+  setStatus(aborted?"Morse arrete":"Lecture Morse terminee");
+}
+void decodeMorseMicrophone(){
+  // Experimental clean-tone decoder: 880 Hz bursts with approx. 120ms dots.
+  // It does not attempt full-band speech recognition or decode arbitrary radios.
+  M5Cardputer.Speaker.end();
+  if(!M5Cardputer.Mic.begin()){
+    morseOutput="Micro indisponible";changeView(View::MORSE_RESULT);return;
+  }
+  delay(900);
+  constexpr int chunk=256, chunks=320;
+  static float energy[chunks];
+  int16_t samples[chunk];
+  morseOutput="";setStatus("Ecoute Morse (environ 5 secondes)");paint();
+  float maxEnergy=0;
+  const float coeff=2*cosf(2*3.141592653589793f*880*chunk/AUDIO_RATE);
+  bool good=true;int n=0;
+  for(int k=0;k<chunks;k++){
+    if(!M5Cardputer.Mic.record(samples,chunk,AUDIO_RATE,false)){good=false;break;}
+    uint32_t t=millis();
+    while(M5Cardputer.Mic.isRecording() && millis()-t<700)delay(1);
+    if(M5Cardputer.Mic.isRecording()){good=false;break;}
+    // Goertzel band energy around an 880Hz reference tone.
+    float s0=0,s1=0,s2=0;
+    for(int i=0;i<chunk;i++){
+      s0=samples[i]/32768.0f+coeff*s1-s2;
+      s2=s1;s1=s0;
+    }
+    const float power=s1*s1+s2*s2-coeff*s1*s2;
+    energy[n++]=power;
+    if(power>maxEnergy)maxEnergy=power;
+  }
+  M5Cardputer.Mic.end();
+  if(!good || n<60 || maxEnergy<0.4f){
+    morseOutput="Signal faible ou micro indisponible";changeView(View::MORSE_RESULT);return;
+  }
+  // Consecutive 16ms windows are classified against peak energy.
+  const float threshold=maxEnergy*0.21f;
+  String pattern,output;bool previous=false;int length=0;
+  bool started=false;
+  for(int i=0;i<=n;i++){
+    const bool on=i<n && energy[i]>threshold;
+    if(i==0){previous=on;length=1;continue;}
+    if(i<n && on==previous){length++;continue;}
+    const uint32_t ms=(uint32_t)length*16;
+    if(previous){
+      if(ms>=56){pattern+=ms<220?".":"-";started=true;}
+    }else if(started){
+      if(ms>=760){
+        if(pattern.length()){output+=NexusMorse::decodeSymbol(pattern);pattern="";}
+        if(output.length()&&!output.endsWith(" "))output+=" ";
+      }else if(ms>=280){
+        if(pattern.length()){output+=NexusMorse::decodeSymbol(pattern);pattern="";}
+      }
+    }
+    previous=on;length=1;
+  }
+  if(pattern.length())output+=NexusMorse::decodeSymbol(pattern);
+  output.trim();
+  morseOutput=output.length()?output:"Aucun Morse reconnu";
+  setStatus("Decodage beta: tone 880Hz, bruit faible");
+  changeView(View::MORSE_RESULT);
+}
+void openSectionSelection(){
+  if(homeIndex==0){
+    switch(sectionIndex){
+      case 0:pageHistory=0;textPage=0;pollInbox();changeView(View::HISTORY);
+        if(historySize)acknowledgeMessage(history[historySize-1].id);break;
+      case 1:changeView(View::COMPOSE);break;
+      case 2:changeView(View::SENT);refreshSent();break;
+    }
+  }else if(homeIndex==1){
+    switch(sectionIndex){
+      case 0:recordVoice();break;
+      case 1:uploadVoice();break;
+      case 2:listVoiceArchives();changeView(View::VOICE_ARCHIVE);break;
+      case 3:playVoice();break;
+      case 4:changeView(View::DISCARD_VOICE);break;
+    }
+  }else if(homeIndex==2){
+    if(sectionIndex==2){decodeMorseMicrophone();}
+    else{morseMode=sectionIndex;input="";changeView(View::MORSE_EDIT);}
+  }else if(homeIndex==3){
+    if(sectionIndex==0)wifiSetup();
+    else changeView(View::DIAG);
+  }else{
+    switch(sectionIndex){
+      case 0:configIndex=0;changeView(View::CONFIG);break;
+      case 1:changeView(View::DIAG);break;
+      case 2:initSd();setStatus(sdReady?"microSD reconnue":"microSD absente");paint();break;
+    }
+  }
+}
+
 void openHomeSelection(){
   switch(homeIndex){
     case 0:pageHistory=0;textPage=0;pollInbox();changeView(View::HISTORY);
