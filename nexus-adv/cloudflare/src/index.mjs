@@ -1,5 +1,5 @@
 // NEXUS ADV - Cloudflare Worker + D1 (Free tier), 2026-10-31.
-// Security: two separate long random bearer tokens stored as Worker secrets;
+// Security: two separate device bearer tokens stored as Worker secrets;
 // authorization applied to every message, no public listing or files.
 const MAX_TEXT = 600;
 const MAX_WAV = 120000;
@@ -58,7 +58,7 @@ export default {
   try {
    const url=new URL(request.url), pathname=url.pathname;
    if(request.method==='GET' && pathname==='/health') return reply({ok:true,version:'ADV-0.4'});
-   if(!env.DB || !env.ALICE_TOKEN || !env.BOB_TOKEN || env.ALICE_TOKEN===env.BOB_TOKEN)
+   if(!env.DB || !env.ALICE_TOKEN || !env.BOB_TOKEN || env.ALICE_TOKEN===env.BOB_TOKEN || env.ALICE_TOKEN.length<12 || env.BOB_TOKEN.length<12)
      return fail(503,'Server not configured');
    const sender=await identify(request,env);
    if(!sender) return fail(401,'Unauthorized');
