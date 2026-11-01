@@ -1,5 +1,5 @@
 // NEXUS ADV - Cloudflare Worker + D1 (Free tier), 2026-10-31.
-// Security: two separate device bearer tokens stored as Worker secrets;
+// Authentication: two distinct tokens (legacy) or one shared code plus explicit device role.
 // authorization applied to every message, no public listing or files.
 const MAX_TEXT = 600;
 const MAX_WAV = 120000;
@@ -31,7 +31,17 @@ async function identify(request, env) {
   const a=request.headers.get('Authorization')||'';
   if(!a.startsWith('Bearer ')) return null;
   const tok=a.slice(7);
-  if(tok.length<12 || tok.length>160) return null;
+  if(tok.length<10 || tok.length>160) return null;
+  // Shared mode uses one passcode on both devices. The device role is explicit,
+  // and therefore is NOT a separate authentication factor.
+  if(env.SHARED_TOKEN) {
+    if(env.SHARED_TOKEN.length<10 || env.SHARED_TOKEN.length>160) return null;
+    const role=request.headers.get('X-Nexus-User');
+    if(!validUser(role))return null;
+    return await sameToken(tok,env.SHARED_TOKEN) ? role : null;
+  }
+  // Backward compatibility while the new shared secret has not been installed.
+  if(tok.length<12) return null;
   if(await sameToken(tok,env.ALICE_TOKEN)) return 'alice';
   if(await sameToken(tok,env.BOB_TOKEN)) return 'bob';
   return null;
@@ -58,7 +68,7 @@ export default {
   try {
    const url=new URL(request.url), pathname=url.pathname;
    if(request.method==='GET' && pathname==='/health') return reply({ok:true,version:'ADV-0.4'});
-   if(!env.DB || !env.ALICE_TOKEN || !env.BOB_TOKEN || env.ALICE_TOKEN===env.BOB_TOKEN || env.ALICE_TOKEN.length<12 || env.BOB_TOKEN.length<12)
+   if(!env.DB || (!env.SHARED_TOKEN && (!env.ALICE_TOKEN || !env.BOB_TOKEN || env.ALICE_TOKEN===env.BOB_TOKEN || env.ALICE_TOKEN.length<12 || env.BOB_TOKEN.length<12)))
      return fail(503,'Server not configured');
    const sender=await identify(request,env);
    if(!sender) return fail(401,'Unauthorized');
