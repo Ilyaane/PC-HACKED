@@ -74,6 +74,10 @@ if(shared) {
     const res=await fetch(url+'/session',{headers});
     if(!res.ok || (await res.json()).user!==role)
       throw new Error('Shared-code authentication failed for '+role);
+    const unread=await fetch(url+'/unread',{headers});
+    const state=unread.ok?await unread.json():{};
+    if(!unread.ok || !Number.isInteger(state.unread) || state.unread<0)
+      throw new Error('Unread status smoke test failed for '+role);
   }
   const missingRole=await fetch(url+'/session',{headers:{Authorization:`Bearer ${shared}`}});
   if(missingRole.status!==401)throw new Error('Shared code accepted without a role');
@@ -95,6 +99,10 @@ if(shared) {
     const res = await fetch(url + '/session', {headers: {Authorization: `Bearer ${token}`}});
     if (!res.ok || (await res.json()).user !== expected)
       throw new Error('Legacy authenticated session smoke test failed');
+    const unread=await fetch(url+'/unread',{headers:{Authorization:`Bearer ${token}`}});
+    const state=unread.ok?await unread.json():{};
+    if(!unread.ok || !Number.isInteger(state.unread) || state.unread<0)
+      throw new Error('Legacy unread status smoke test failed');
   }
 }
 console.log(`NEXUS DEPLOYMENT SUCCESS: ${url}`);
