@@ -367,19 +367,29 @@ void loadHistory(){
 }
 bool remember(uint32_t id,String sender,String kind,String text){
   text.replace("\n"," ");text.replace("\r"," ");text.replace("|","/");
-  if(historySize==HISTORY_CAP){for(int i=1;i<HISTORY_CAP;i++)history[i-1]=history[i];historySize--;}
-  History& h=history[historySize++];h.id=id;h.sender=sender;h.kind=kind;h.body=text;
-  if(!sdReady)return true; // RAM-only session: do not persist a cursor on flash.
-  File f=SD.open(HISTORY,FILE_APPEND);
-  if(!f) return false;
-  String line=String(id)+"|"+sender+"|"+kind+"|"+text+"\n";
-  const size_t written=f.print(line);
-  f.flush();f.close();
-  return written==line.length();
+  // Do not persist duplicate messages when NVS cursor is behind the SD journal.
+  for(uint8_t i=0;i<historySize;i++)if(history[i].id==id)return true;
+  if(sdReady){
+    File f=SD.open(HISTORY,FILE_APPEND);
+    if(!f)return false;
+    const String line=String(id)+"|"+sender+"|"+kind+"|"+text+"\n";
+    const bool ok=f.print(line)==line.length();
+    f.flush();f.close();
+    if(!ok)return false;
+  }
+  if(historySize==HISTORY_CAP){
+    for(int i=1;i<HISTORY_CAP;i++)history[i-1]=history[i];
+    historySize--;
+  }
+  History& h=history[historySize++];
+  h.id=id;h.sender=sender;h.kind=kind;h.body=text;
+  return true;
 }
 void initSd(){
   SPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS);
-  sdReady=SD.begin(SD_CS,SPI,20000000);if(sdReady)loadHistory();
+  sdReady=SD.begin(SD_CS,SPI,20000000);
+  if(sdReady){historySize=0;loadHistory();}
+  else{historySize=0;cursor=0;} // No persistent journal: fetch from server on boot.
 }
 bool timeReady(){
   if(time(nullptr)>1700000000)return true;
