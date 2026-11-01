@@ -1,4 +1,4 @@
-/* NEXUS ADV v0.7.0 SOURCE - Cardputer ADV ONLY.
+/* NEXUS ADV v0.8.0 SOURCE - Cardputer ADV ONLY.
  * Requires M5Cardputer >=1.1.1, microSD for audio; zero PSRAM allocation.
  * Wi-Fi credentials and device token are configured on the keyboard and saved in NVS.
  * Not hardware-certified: see VERIFICATION.md before flashing.
@@ -23,6 +23,9 @@ constexpr size_t AUDIO_FRAME=1024, AUDIO_FRAMES=48; // 3.072 seconds, 98,348-byt
 constexpr size_t MAX_VOICE=120000;
 constexpr char TX_AUDIO[]="/nexus_tx.wav", RX_AUDIO[]="/nexus_rx.wav", TMP_RX[]="/nexus_rx.tmp", RX_BACKUP[]="/nexus_rx.bak";
 constexpr char HISTORY[]="/nexus_history.txt";
+constexpr char VOICE_ROOT[]="/NEXUS/MESSAGES_VOCAUX";
+constexpr char VOICE_INDEX[]="/NEXUS/MESSAGES_VOCAUX/INDEX.txt";
+constexpr uint8_t VOICE_LIST_MAX=24;
 
 Preferences prefs;
 String wifiSsid, wifiPass, serverUrl, deviceToken, recipient="bob", editor, statusLine="Initialisation";
@@ -30,7 +33,7 @@ String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, VOICE_ARCHIVE, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
@@ -38,7 +41,9 @@ bool scanSaved[24]={}, scanOpen[24]={};
 uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
 constexpr uint8_t HOME_COUNT=11, CONFIG_COUNT=4, WIFI_SLOTS=5;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
-uint8_t textPage=0;
+uint8_t textPage=0, voiceSelection=0, voiceCount=0;
+struct VoiceArchive {uint32_t id=0; String sender,stamp,path;};
+VoiceArchive voiceArchives[VOICE_LIST_MAX];
 bool fullRepaint=true;
 struct History {uint32_t id=0; String sender,kind,body;};
 History history[8];
@@ -113,9 +118,20 @@ void paint(){
  switch(view){
  case View::HOME: {
    const String opts[]={"Messages recus","Ecrire un message","Messages envoyes","Enregistrer un vocal",
-     "Envoyer le vocal","Ecouter un vocal","Reseaux Wi-Fi","Parametres NEXUS",
+     "Envoyer le vocal","Archives vocaux microSD","Reseaux Wi-Fi","Parametres NEXUS",
      "Diagnostics","Detecter microSD","Effacer le vocal"};
-   drawMenu("NEXUS v0.7  MESSAGERIE",opts,HOME_COUNT,homeIndex);break;}
+   drawMenu("NEXUS  MESSAGERIE",opts,HOME_COUNT,homeIndex);break;}
+ case View::VOICE_ARCHIVE: {
+   if(!sdReady){drawLines("ARCHIVES VOCALES","Inserer une microSD"," puis detecter microSD","OPT: retour");break;}
+   if(!voiceCount){drawLines("ARCHIVES VOCALES","Aucun vocal archive","Les vocaux recus sont","sauvegardes automatiquement","OPT: retour");break;}
+   String opts[VOICE_LIST_MAX];
+   for(int i=0;i<voiceCount;i++){
+     const VoiceArchive& e=voiceArchives[voiceCount-1-i];
+     opts[i]=e.stamp+" "+e.sender+" #"+String(e.id);
+   }
+   drawMenu("VOCAL "+String(voiceSelection+1)+"/"+String(voiceCount),
+            opts,voiceCount,voiceSelection);
+   break;}
  case View::WIFI_CONFIRM: {
    const String opts[]={"Connecter : "+clipped(wifiSsid,23),"Choisir un autre Wi-Fi","Oublier ce reseau"};
    drawMenu("WI-FI MEMORISE",opts,3,confirmIndex);break;}
