@@ -35,6 +35,20 @@ checks={
  'Sent text also archived': 'saved=archiveText(id,from,(uint32_t)time(nullptr),editor,true)' in cpp,
  '24 recent offline messages': 'HISTORY_CAP=24' in cpp and 'loadHistory()' in cpp,
  'Six horizontal home categories': 'HOME_COUNT=6' in cpp and '"AUTRES"' in cpp,
+
+ 'Notification toggle in System': 'Son notification : ' in cpp and 'prefs.putBool("beep",notificationSound)' in cpp,
+ 'Notification persisted': 'notificationSound=prefs.getBool("beep",true)' in cpp,
+ 'Sound only after a new unread ID': 'id>notifiedMessageId && n>0 && notificationSound' in cpp,
+ 'Notification tone bounded': 'M5Cardputer.Speaker.tone(950,85)' in cpp and 'M5Cardputer.Speaker.end()' in cpp,
+ 'Archive search query editing': 'case View::SEARCH_EDIT' in cpp and 'searchTextArchive()' in cpp,
+ 'Archive search scans only NEXUS text root': 'scanTextFolder(TEXT_ROOT,keyword,0)' in cpp and 'path.startsWith(String(TEXT_ROOT)+"/")' in cpp,
+ 'Archive search is bounded': 'searchScanned>=12000' in cpp and 'searchSize==SEARCH_MAX' in cpp,
+ 'Archive search result view': 'case View::SEARCH_VIEW' in cpp and 'openArchiveText()' in cpp,
+ 'Battery uses official M5Stack API': 'M5Cardputer.Power.getBatteryLevel()' in cpp and 'M5Cardputer.Power.getBatteryVoltage()' in cpp,
+ 'Battery smoothes readings': 'batteryVoltageSmooth*3+median' in cpp,
+ 'Battery explicitly says estimated': 'Niveau estime: ' in cpp and 'Pas de jauge precise' in cpp,
+ 'Battery refresh via Enter': 'if(k.enter){measureBattery();paint();}' in cpp,
+
  'NVS independent of microSD': 'prefsReady=prefs.begin("nexusadv",false)' in cpp and 'if(!sdReady)' in cpp,
 
  'No letter shortcut menu': "case 't':case 'T'" not in cpp and 'openSectionSelection()' in cpp,
