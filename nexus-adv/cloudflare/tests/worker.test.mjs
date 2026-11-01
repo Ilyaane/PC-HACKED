@@ -202,3 +202,35 @@ test('shared-code voice remains isolated by explicit role and requires the code'
  const wrongCode=await worker.fetch(req('GET','/voice/'+id,'DemoX_974',undefined,{'X-Nexus-User':'bob'}),env);
  assert.equal(wrongCode.status,401);
 });
+
+test('unread summary tracks offline deliveries and read acknowledgements per recipient',async()=>{
+  const env=makeEnv();
+  let r=await worker.fetch(req('GET','/unread'),env);
+  assert.equal(r.status,401);
+  r=await worker.fetch(req('GET','/unread',bob),env);
+  assert.equal(r.status,200);assert.deepEqual(await r.json(),{unread:0,latest:null});
+  const m1=await sendText(env,alice,'bob','Bonjour depuis Alice','unread_msg_id_001');
+  const m2=await sendText(env,alice,'bob','Deuxieme message', 'unread_msg_id_002');
+  assert.equal(m1.status,200);assert.equal(m2.status,200);
+  const id1=(await m1.json()).id,id2=(await m2.json()).id;
+  r=await worker.fetch(req('GET','/unread',bob),env);
+  let state=await r.json();assert.equal(state.unread,2);
+  assert.equal(state.latest.id,id2);assert.equal(state.latest.sender,'alice');
+  assert.equal(state.latest.preview,'Deuxieme message');
+  r=await worker.fetch(req('GET','/unread',alice),env);
+  assert.equal((await r.json()).unread,0);
+  assert.equal((await worker.fetch(req('POST',`/messages/${id1}/read`,bob),env)).status,200);
+  r=await worker.fetch(req('GET','/unread',bob),env);
+  state=await r.json();assert.equal(state.unread,1);assert.equal(state.latest.id,id2);
+  assert.equal((await worker.fetch(req('POST',`/messages/${id2}/read`,bob),env)).status,200);
+  state=await (await worker.fetch(req('GET','/unread',bob),env)).json();
+  assert.equal(state.unread,0);assert.equal(state.latest,null);
+});
+test('shared passcode unread summary requires a valid device role',async()=>{
+  const env=makeEnv();env.SHARED_TOKEN='Sample_974!';
+  const auth=role=>({'X-Nexus-User':role});
+  assert.equal((await worker.fetch(req('GET','/unread',env.SHARED_TOKEN),env)).status,401);
+  assert.equal((await worker.fetch(req('GET','/unread',env.SHARED_TOKEN,undefined,auth('wrong')),env)).status,401);
+  const res=await worker.fetch(req('GET','/unread',env.SHARED_TOKEN,undefined,auth('bob')),env);
+  assert.equal(res.status,200);assert.equal((await res.json()).unread,0);
+});
