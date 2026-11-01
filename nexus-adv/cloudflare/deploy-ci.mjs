@@ -45,8 +45,22 @@ try {
 const match = output.match(/https:\/\/[-a-z0-9.]+\.workers\.dev/gi);
 const url = match?.at(-1)?.replace(/\/$/,'');
 if (!url) throw new Error('Cloudflare deploy completed but no workers.dev URL could be parsed; check Cloudflare dashboard.');
-const health = await fetch(url + '/health');
-if (!health.ok || !(await health.json()).ok) throw new Error('Deployed Worker failed /health');
+console.log('Deployed NEXUS URL:', url);
+let ready = false;
+let lastStatus = 'no response';
+for (let attempt=1; attempt<=15; attempt++) {
+  try {
+    const response = await fetch(url + '/health', {signal: AbortSignal.timeout(8000)});
+    const body = await response.text();
+    lastStatus = 'HTTP '+response.status+' ('+body.slice(0,100).replace(/[^\\x20-\\x7e]/g,' ')+')';
+    if (response.ok) {
+      try { if (JSON.parse(body).ok===true) { ready=true; break; } } catch {}
+    }
+  } catch(e) { lastStatus = String(e?.message || e).slice(0,150); }
+  if (attempt < 15) await new Promise(r=>setTimeout(r,3000));
+}
+if (!ready) throw new Error('Deployed Worker failed /health after retries: '+lastStatus);
+console.log('NEXUS /health smoke test passed.');
 const unauth = await fetch(url + '/session');
 if (unauth.status !== 401) throw new Error('Session endpoint does not reject unauthenticated requests.');
 for (const [token, expected] of [[alice,'alice'],[bob,'bob']]) {
