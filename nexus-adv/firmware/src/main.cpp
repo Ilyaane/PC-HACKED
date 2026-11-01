@@ -91,7 +91,8 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
   }
   l.drawFastHLine(3,114,234,COL_PANEL);
   l.fillRect(0,115,240,20,COL_BG);
-  l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,119);l.print(clipped(hint,37));
+  l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,119);l.print(clipped(statusLine,30));
+  l.setCursor(202,119);l.print("^v OK");
 }
 void paint(){
  switch(view){
