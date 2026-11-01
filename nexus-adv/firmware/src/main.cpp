@@ -1,4 +1,4 @@
-/* NEXUS ADV v0.4.1 SOURCE - Cardputer ADV ONLY.
+/* NEXUS ADV v0.5.0 SOURCE - Cardputer ADV ONLY.
  * Requires M5Cardputer >=1.1.1, microSD for audio; zero PSRAM allocation.
  * Wi-Fi credentials and device token are configured on the keyboard and saved in NVS.
  * Not hardware-certified: see VERIFICATION.md before flashing.
@@ -16,7 +16,7 @@
 #include "ca_roots.h"
 
 namespace {
-constexpr uint16_t COL_BG=0x1083, COL_PANEL=0x2128, COL_ACCENT=0x576D, COL_TEXT=0xFFFF, COL_MUTED=0xAD75, COL_WARN=0xFBC0;
+constexpr uint16_t COL_BG=0x0000, COL_PANEL=0x18C3, COL_ACCENT=0x07FF, COL_TEXT=0xFFFF, COL_MUTED=0xAD55, COL_WARN=0xFBE0;
 constexpr int SD_SCK=40, SD_MISO=39, SD_MOSI=14, SD_CS=12;
 constexpr uint32_t AUDIO_RATE=16000;
 constexpr size_t AUDIO_FRAME=1024, AUDIO_FRAMES=48; // 3.072 seconds, 98,348-byte WAV
@@ -34,6 +34,9 @@ enum class View { HOME, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL
 View view=View::HOME;
 String input;
 String scanNames[24];
+bool scanSaved[24]={}, scanOpen[24]={};
+uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
+constexpr uint8_t HOME_COUNT=11, CONFIG_COUNT=4, WIFI_SLOTS=5;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
 uint8_t textPage=0;
 struct History {uint32_t id=0; String sender,kind,body;};
@@ -56,6 +59,39 @@ void drawLines(const String& title,const String& a="",const String& b="",const S
   for(int i=0;i<5;++i){l.setCursor(7,26+i*17);l.print(clipped(lines[i],37));}
   l.drawFastHLine(0,114,240,COL_PANEL);
   l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,120);l.print(clipped(statusLine,37));
+}
+void menuFrame(const String& title){
+  auto& l=M5Cardputer.Display;
+  l.fillScreen(COL_BG);
+  l.fillRoundRect(2,2,236,20,5,COL_PANEL);
+  l.fillRoundRect(7,6,11,11,3,COL_ACCENT);
+  l.setTextColor(COL_BG,COL_ACCENT);
+  l.setTextSize(1);l.setCursor(9,8);l.print("N");
+  l.setTextColor(COL_TEXT,COL_PANEL);
+  l.setCursor(24,9);l.print(clipped(title,25));
+  l.fillCircle(222,12,3,WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN);
+}
+void drawMenu(const String& title,const String opts[],int count,int selected,
+              const String& hint="Fn+; ^  Fn+. v   Entree OK"){
+  auto& l=M5Cardputer.Display; menuFrame(title);
+  const int start=(selected/5)*5;
+  for(int r=0;r<5;r++){
+    const int idx=start+r;
+    if(idx>=count)break;
+    const int y=26+r*17;
+    if(idx==selected){
+      l.fillRoundRect(4,y-1,232,17,5,COL_ACCENT);
+      l.fillTriangle(8,y+3,8,y+11,13,y+7,COL_BG);
+      l.setTextColor(COL_BG,COL_ACCENT);
+    }else{
+      l.fillRoundRect(4,y-1,232,17,5,COL_PANEL);
+      l.setTextColor(COL_TEXT,COL_PANEL);
+    }
+    l.setTextSize(1);l.setCursor(18,y+4);l.print(clipped(opts[idx],35));
+  }
+  l.drawFastHLine(3,114,234,COL_PANEL);
+  l.fillRect(0,115,240,20,COL_BG);
+  l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,119);l.print(clipped(hint,37));
 }
 void paint(){
  switch(view){
