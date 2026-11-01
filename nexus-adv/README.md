@@ -1,66 +1,53 @@
-# NEXUS Messagerie — Édition Cardputer ADV — v0.4.1
+# NEXUS Messagerie pour Cardputer ADV — v0.5 (interface menus)
 
-**Statut : SOURCES EXPÉRIMENTALES. Aucun `.bin` certifié ni serveur public en fonctionnement.**
+Projet **M5Stack Cardputer ADV** (ESP32-S3, 8 Mo de flash). La version v0.5 améliore l'interface et le Wi-Fi. Le serveur Cloudflare Workers + D1 **NEXUS** a été déployé et testé avec les jetons existants à l'adresse `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Le nouveau firmware v0.5 doit être validé par la compilation GitHub Actions et par des essais réels sur Cardputer ADV avant d'être considéré comme testé matériellement.
 
-Cette archive contient un projet réservé au **M5Stack Cardputer ADV (K132-Adv, ESP32-S3FN8, 8 Mo de flash, sans PSRAM)**. Elle ne comprend **aucun firmware StickS3** et ne remplace pas Bruce automatiquement.
+## Menus et navigation
 
-## Le projet, en une phrase
+L'accueil contient un menu noir avec texte blanc et sélection cyan, défilant par cinq choix visibles :
 
-Deux Cardputer ADV équipés chacun du même logiciel, de leur propre jeton de connexion, d'un Wi-Fi avec Internet et d'une microSD peuvent échanger des **messages écrits et des fichiers vocaux WAV** par l'intermédiaire d'un serveur Cloudflare Worker relié à D1. Le serveur garde les messages quand l'autre appareil est éteint.
+1. Messages reçus
+2. Écrire un message
+3. Messages envoyés
+4. Enregistrer un message vocal WAV
+5. Envoyer le message vocal
+6. Écouter un message vocal
+7. Réseaux Wi-Fi
+8. Paramètres NEXUS
+9. Diagnostics
+10. Détecter la microSD
+11. Effacer un vocal en attente
 
-## Dossiers de l'archive
+**Naviguer** : `Fn + ;` = haut, `Fn + .` = bas, `Entrée` = choisir. `Fn + \`` = retour (Esc). Dans l'historique, `Fn + ,` et `Fn + /` changent de page. Ces combinaisons correspondent au clavier réel de M5Cardputer 1.1.1; ce modèle n'a pas de touches flèches indépendantes. Les lettres T/C/W/etc. ne sont plus requises pour se déplacer dans les menus. Un témoin Wi-Fi et le dernier état de connexion sont affichés.
 
-- `firmware/src/main.cpp` : interface écran/clavier, Wi-Fi mémorisé, texte, WAV, réception différée.
-- `firmware/include/ca_roots.h` : 3 certificats CA publics pour les connexions HTTPS vérifiées.
-- `firmware/platformio.ini` : configuration ESP32-S3 8 Mo sans PSRAM et taille maximale de partition d'application.
-- `cloudflare/src/index.mjs` : API de messagerie Cloudflare Worker.
-- `cloudflare/schema.sql` : schéma D1, avec identifiants de retransmission uniques.
-- `cloudflare/tests/worker.test.mjs` : tests d'API Node.js + SQLite en mémoire.
-- `.github/workflows/build-adv.yml` : pipeline **à lancer dans votre dépôt GitHub** pour tenter la compilation et récupérer un `.bin` si la compilation réussit.
-- `tests/static_checks.py` : vérifications de cohérence textuelle, **pas** un compilateur.
-- `docs/DEPLOIEMENT.md` et `docs/PROTOCOLE_TESTS_CARDPUTER_ADV.md` : configuration et scénarios de test.
-- `docs/VERIFICATION.md` : résultat honnête des tests de cette livraison.
+Le firmware conserve les fonctions de la version précédente (texte, reçu/envoyé, audio WAV, microSD, brouillons persistants, HTTPS, accusés de lecture).
 
-## Écran et touches prévus
+## Réseaux Wi-Fi
 
-| Touche | Fonction |
-|---|---|
-| `T` | Composer un message au clavier ; Entrée : envoyer. En cas d'échec après une tentative réelle, le brouillon reste et peut être renvoyé au retour du réseau. |
-| `I` | Lire les 8 derniers messages en cache (et les pages de texte de chaque message) ; flèches Haut/Bas : naviguer ; N/B : page de texte suivante/précédente. |
-| `O` | Voir l'état du dernier message envoyé (lu / non lu), actualiser avec Entrée. |
-| `V` | Enregistrer un WAV mono PCM 16 kHz / 16 bits d'environ 3 secondes sur microSD, **uniquement après appui manuel**. |
-| `U` | Envoyer ou réessayer le vocal ; sa copie temporaire locale est effacée si l'envoi est confirmé. |
-| `P` | Télécharger si nécessaire le dernier WAV reçu et le lire au haut-parleur. |
-| `W` | Choisir Wi-Fi mémorisé : Entrée=Oui, N=Non, F=oublier avec confirmation. |
-| `C` | Régler URL serveur HTTPS, jeton personnel et correspondant (alice/bob). |
-| `R` | Retenter le montage d'une microSD insérée après le démarrage. |
-| `D` | Diagnostic réseau, mémoire et microSD. |
-| `Z` | Supprimer un vocal non envoyé (confirmation nécessaire). |
-| `Esc` | Retour accueil. |
+- Le firmware conserve **jusqu'à cinq réseaux** et leurs mots de passe en NVS (migration de l'ancien réseau enregistré).
+- Au démarrage, il réessaie le dernier réseau, puis les autres déjà enregistrés si nécessaire.
+- Un réseau connu apparaît avec `[MEM]` lors de la recherche Wi-Fi : **Entrée reconnecte sans retaper le mot de passe**.
+- Sur un réseau inconnu, le mot de passe apparaît **en clair pendant la saisie**, sans étoiles. Évite de le saisir devant des personnes qui ne doivent pas le connaître.
+- La suppression du réseau courant demande confirmation. Les autres réseaux mémorisés restent intacts.
 
-Les touches exactes, les combinaisons Fn, les timings audio, la reconnexion Wi-Fi et l'affichage **exigent validation sur Cardputer ADV physique**.
+**Important à la mise à jour :** flasher uniquement `firmware.bin` à l'adresse **0x10000** et **ne pas effacer la mémoire complète** permet normalement de conserver les données NVS (Wi-Fi et configuration). L'image complète `NEXUS_ADV_full_flash_0x0.bin` écrite à `0x0` peut effacer les réglages NVS; refaire alors la configuration.
 
-## Ce qui ne nécessite aucun service payant
+## Deux appareils et jetons
 
-- Textes et vocaux WAV transmis et conservés via Cloudflare Workers Free + D1 Free, **dans les limites des quotas**.
-- Pas de transcription de la voix en texte, pas de synthèse vocale par IA, pas de coût d'API d'IA.
-- Pas de deuxième serveur, ni d'ordinateur allumé au domicile.
+Les deux Cardputer utilisent la même URL serveur. Le premier utilise le jeton Alice avec destinataire `bob`, et le deuxième le jeton Bob avec destinataire `alice`. Ces jetons sont saisis manuellement via **Paramètres NEXUS**.
 
-Le prix fixe du logiciel est nul ; le Wi-Fi/accès Internet, les éventuels achats de microSD ou de matériel et la disponibilité des offres tierces restent hors du projet. N'activer aucun forfait facturé.
+Le serveur et le firmware acceptent désormais des jetons **d'au moins 12 caractères** et les anciens jetons longs restent valides. Pour réellement passer aux nouveaux jetons courts, il faut mettre à jour **les deux secrets GitHub Actions** `NEXUS_ALICE_TOKEN` et `NEXUS_BOB_TOKEN`, redéployer le serveur et saisir les mêmes valeurs sur les appareils. Aucun jeton privé n'est inscrit dans ce dépôt.
 
-## Sécurité et confidentialité
+Privilégier 12 caractères **difficiles à deviner**, plutôt qu'un mot courant ou un code public. Les jetons sont des identifiants, **pas** un chiffrement de bout en bout. Les messages restent lisibles par l'administrateur du serveur et les mots de passe Wi-Fi stockés en NVS ne sont pas protégés contre un accès physique au matériel.
 
-L'API exige deux secrets **différents**, un par appareil, et n'envoie les messages qu'au destinataire autorisé. Les communications utilisent HTTPS avec vérification d'autorité de certification. **Il n'y a PAS de chiffrement de bout en bout :** les données sont lisibles par l'administrateur du serveur Cloudflare/D1. Les secrets enregistrés sur le Cardputer via NVS ne sont pas chiffrés contre une personne ayant accès au matériel. À utiliser pour des messages ordinaires, pas pour des secrets critiques.
+## Compilation et vérification
 
-## À ne pas faire
+Workflow : `.github/workflows/nexus-adv-build.yml`. Il lance :
+- les tests API Node/SQLite,
+- les vérifications statiques,
+- la compilation PlatformIO M5Cardputer ADV,
+- le contrôle de l'en-tête ESP32 et la création des deux fichiers firmware.
 
-- Ne pas flasher les sources `.cpp` comme un `.bin` : ce ne sont pas les mêmes formats.
-- Ne pas installer cette version sur un Cardputer original ou un StickS3.
-- Ne pas publier ou transmettre les valeurs de `ALICE_TOKEN`, `BOB_TOKEN` ou le mot de passe Wi-Fi.
-- Ne pas annoncer « sans bugs » ou « prêt à flasher » sans compilations et essais matériels.
+L'artifact GitHub contient `firmware.bin` (pour l'offset 0x10000) et `NEXUS_ADV_full_flash_0x0.bin` (pour 0x0). Les tests automatiques ne prouvent pas la qualité de l'écran sur un matériel physique. Tester les flèches, la connexion sans ressaisie du Wi-Fi, la saisie visible et l'envoi/réception texte et vocal sur **deux appareils**.
 
-**Prochaine étape concrète :** lire `docs/DEPLOIEMENT.md`, lancer la compilation PlatformIO ou le workflow GitHub Actions, puis suivre `docs/PROTOCOLE_TESTS_CARDPUTER_ADV.md`. La création du serveur seule ne rend pas les appareils opérationnels.
-
-
-### Mise à jour v0.4.1
-Corrections supplémentaires: le changement Wi-Fi annulé restaure les paramètres mémorisés; le diagnostic distingue Wi-Fi connecté du serveur inaccessible; un échec d’écriture de l’historique sur microSD n’avance plus le curseur persistant; récupération améliorée du WAV précédent lors d’un remplacement interrompu. `build_adv.sh` permet une tentative de compilation sur une machine qui possède PlatformIO. **Aucun firmware .bin compilé ici.**
+Le projet NEXUS utilise le Worker `nexus-messagerie` et la base D1 `nexus-messagerie`. Il ne doit pas toucher au projet Déclic Cloudflare Pages.
