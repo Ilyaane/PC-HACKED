@@ -41,15 +41,15 @@ test('health and absent secrets; access control',async()=>{
 });
 test('12-character device tokens authenticate, 11-character tokens are rejected',async()=>{
  const env=makeEnv();
- const a='Novyrax_974!';
- const b='Kelviro_974!';
+ const a='Example_123!';
+ const b='Testing_456!';
  assert.equal(a.length,12);
  assert.equal(b.length,12);
  env.ALICE_TOKEN=a;
  env.BOB_TOKEN=b;
  assert.equal((await worker.fetch(req('GET','/session',a),env)).status,200);
  assert.equal((await worker.fetch(req('GET','/session',b),env)).status,200);
- assert.equal((await worker.fetch(req('GET','/session','Novyra_974!'),env)).status,401);
+ assert.equal((await worker.fetch(req('GET','/session','Example_123'),env)).status,401);
  assert.equal((await worker.fetch(req('GET','/session',a.slice(0,11)),env)).status,401);
  assert.equal((await sendText(env,a,'bob','Essai avec 12 caracteres','short_token_msg_1')).status,200);
  const r=await worker.fetch(req('GET','/messages',b),env);
