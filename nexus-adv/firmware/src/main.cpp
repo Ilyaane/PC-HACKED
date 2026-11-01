@@ -71,7 +71,7 @@ void paint(){
  case View::WIFI_PASSWORD: drawLines("MOT DE PASSE WI-FI",clipped(wifiSsid,32),masked(input.length()),"ENTREE: tester/sauver", "ESC: annuler");break;
  case View::CONFIG: drawLines("REGLAGES DU SERVEUR", "1: adresse HTTPS", "2: jeton de cet appareil", "3: correspondant (alice/bob)", "W: configuration Wi-Fi", "ESC: retour");break;
  case View::EDIT_URL: drawLines("SERVEUR HTTPS", "Adresse du Worker:",clipped(input,34),"ENTREE: enregistrer","ESC: annuler");break;
- case View::EDIT_TOKEN: drawLines("JETON PERSONNEL", "Secret (minimum 24 chars)",masked(input.length()),"ENTREE: enregistrer","ESC: annuler");break;
+ case View::EDIT_TOKEN: drawLines("JETON PERSONNEL", "Secret (minimum 12 chars)",masked(input.length()),"ENTREE: enregistrer","ESC: annuler");break;
  case View::EDIT_PEER: drawLines("DESTINATAIRE", "Choisir alice ou bob",input,"ENTREE: enregistrer","ESC: annuler");break;
  case View::COMPOSE: {
    String tail=editor.length()>66?editor.substring(editor.length()-66):editor;
@@ -155,7 +155,7 @@ bool connectSaved(){
   setStatus("Wi-Fi connecte / test TLS");
   timeReady();return true;
 }
-bool configured(){return serverUrl.startsWith("https://") && !serverUrl.endsWith("/") && deviceToken.length()>=24;}
+bool configured(){return serverUrl.startsWith("https://") && !serverUrl.endsWith("/") && deviceToken.length()>=12;}
 
 bool openHttp(HTTPClient& http, WiFiClientSecure& client,const String& path){
   if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi deconnecte");return false;}
@@ -451,7 +451,7 @@ void handleInput(){
       if(view==View::WIFI_PASSWORD){storeWiFiAfterTest(input);input="";return;}
       if(view==View::EDIT_URL){input.trim();if(!input.startsWith("https://")||input.indexOf(' ',8)>=0){setStatus("HTTPS obligatoire");}
         else{while(input.endsWith("/"))input.remove(input.length()-1);serverUrl=input;prefs.putString("server",serverUrl);serverReady=false;setStatus("Adresse enregistree");changeView(View::CONFIG);return;}}
-      if(view==View::EDIT_TOKEN){if(input.length()<24){setStatus("Jeton trop court");}else{deviceToken=input;prefs.putString("token",deviceToken);serverReady=false;input="";changeView(View::CONFIG);setStatus("Jeton enregistre");return;}}
+      if(view==View::EDIT_TOKEN){if(input.length()<12){setStatus("Jeton trop court");}else{deviceToken=input;prefs.putString("token",deviceToken);serverReady=false;input="";changeView(View::CONFIG);setStatus("Jeton enregistre");return;}}
       if(view==View::EDIT_PEER){input.trim();if(input!="alice"&&input!="bob")setStatus("Choisir alice ou bob");
         else{recipient=input;prefs.putString("peer",recipient);changeView(View::CONFIG);return;}}
       if(view==View::COMPOSE){sendText();return;}
