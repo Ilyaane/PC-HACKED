@@ -33,13 +33,15 @@ String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, VOICE_ARCHIVE, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
 bool scanSaved[24]={}, scanOpen[24]={};
 uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
-constexpr uint8_t HOME_COUNT=11, CONFIG_COUNT=4, WIFI_SLOTS=5;
+constexpr uint8_t HOME_COUNT=5, CONFIG_COUNT=4, WIFI_SLOTS=5;
+uint8_t sectionIndex=0, morseMode=0;
+String morseOutput;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
 uint8_t textPage=0, voiceSelection=0, voiceCount=0;
 struct VoiceArchive {uint32_t id=0; String sender,stamp,path;};
@@ -110,17 +112,93 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
   l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,119);l.print(clipped(statusLine,30));
   l.setCursor(200,119);l.print("; . OK");
 }
+
+String sectionTitle(int section){
+  static const char* names[]={"MESSAGES","VOCAL","MORSE","WI-FI","SYSTEME"};
+  return String(names[constrain(section,0,4)]);
+}
+int sectionOptions(int section,String items[]){
+  if(section==0){items[0]="Boite de reception";items[1]="Nouveau message";items[2]="Messages envoyes";return 3;}
+  if(section==1){items[0]="Enregistrer un vocal";items[1]="Envoyer le vocal";items[2]="Archives microSD";
+    items[3]="Ecouter dernier vocal";items[4]="Effacer brouillon vocal";return 5;}
+  if(section==2){items[0]="Ecrire en Morse";items[1]="Jouer le Morse (son)";items[2]="Decoder son du micro (beta)";return 3;}
+  if(section==3){items[0]="Gerer les reseaux Wi-Fi";items[1]="Etat reseau";return 2;}
+  items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]="Detecter la microSD";return 3;
+}
+void drawHome(){
+  auto& l=M5Cardputer.Display;
+  static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME"};
+  l.fillScreen(COL_BG);
+  l.fillRoundRect(3,3,234,22,5,COL_PANEL);
+  l.setTextColor(COL_TEXT,COL_PANEL);l.setTextSize(1);l.setCursor(12,11);l.print("NEXUS");
+  l.fillCircle(211,14,4,WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN);
+  const int cx=120,cy=68;
+  l.fillRoundRect(52,30,136,76,12,COL_PANEL);
+  l.drawRoundRect(52,30,136,76,12,COL_ACCENT);
+  // Distinctive vector icons; no borrowed firmware art.
+  if(homeIndex==0){
+    l.fillRoundRect(83,46,58,29,5,COL_TEXT);
+    l.fillTriangle(92,74,98,74,91,82,COL_TEXT);
+    l.fillRoundRect(105,59,49,24,4,COL_ACCENT);
+    l.fillTriangle(142,82,150,82,149,88,COL_ACCENT);
+    l.drawFastHLine(113,66,31,COL_BG);l.drawFastHLine(113,72,25,COL_BG);
+  }else if(homeIndex==1){
+    const int heights[]={13,29,37,20,32,15,26};
+    for(int i=0;i<7;i++)l.fillRoundRect(77+i*14,67-heights[i]/2,8,heights[i],3,i%2?COL_TEXT:COL_ACCENT);
+  }else if(homeIndex==2){
+    l.fillCircle(83,68,7,COL_ACCENT);
+    l.fillRoundRect(96,65,22,6,2,COL_TEXT);
+    l.fillCircle(131,68,7,COL_ACCENT);
+    l.fillRoundRect(143,65,18,6,2,COL_TEXT);
+  }else if(homeIndex==3){
+    l.drawLine(80,59,120,42,COL_TEXT);l.drawLine(120,42,160,59,COL_TEXT);
+    l.drawLine(91,67,120,54,COL_ACCENT);l.drawLine(120,54,149,67,COL_ACCENT);
+    l.drawLine(103,75,120,67,COL_TEXT);l.drawLine(120,67,137,75,COL_TEXT);
+    l.fillCircle(120,83,6,COL_ACCENT);
+  }else{
+    l.drawCircle(120,67,21,COL_TEXT);l.drawCircle(120,67,12,COL_ACCENT);
+    l.fillCircle(120,67,5,COL_TEXT);
+    for(int i=0;i<8;i++){
+      float a=i*3.14159265f/4;
+      l.drawLine(120+23*cosf(a),67+23*sinf(a),120+28*cosf(a),67+28*sinf(a),COL_TEXT);
+    }
+  }
+  l.setTextSize(1);l.setTextColor(COL_TEXT,COL_PANEL);
+  l.setCursor(120-(strlen(names[homeIndex])*3),95);l.print(names[homeIndex]);
+  l.fillTriangle(25,65,36,59,36,71,COL_ACCENT);
+  l.fillTriangle(215,65,204,59,204,71,COL_ACCENT);
+  l.setTextColor(COL_MUTED,COL_BG);
+  l.setCursor(8,117);l.print("< ,     / >       Entree");
+  l.setCursor(197,117);l.print(String(homeIndex+1)+"/5");
+}
+
 void paint(){
  static bool firstFrame=true;
  static View lastView=View::HOME;
  fullRepaint=firstFrame || lastView!=view;
  firstFrame=false;lastView=view;
  switch(view){
- case View::HOME: {
-   const String opts[]={"Messages recus","Ecrire un message","Messages envoyes","Enregistrer un vocal",
-     "Envoyer le vocal","Archives vocaux microSD","Reseaux Wi-Fi","Parametres NEXUS",
-     "Diagnostics","Detecter microSD","Effacer le vocal"};
-   drawMenu("NEXUS  MESSAGERIE",opts,HOME_COUNT,homeIndex);break;}
+ case View::HOME:drawHome();break;
+ case View::SECTION: {
+   String items[6];int count=sectionOptions(homeIndex,items);
+   drawMenu(sectionTitle(homeIndex),items,count,sectionIndex);
+   break;}
+ case View::MORSE_EDIT: {
+   String tail=input.length()>90?input.substring(input.length()-90):input;
+   drawLines(morseMode==0?"MORSE VERS TEXTE":"MORSE EN AUDIO",
+     "Tape du texte et valide",
+     tail.substring(0,30),
+     tail.length()>30?tail.substring(30,60):"",
+     tail.length()>60?tail.substring(60):"",
+     "Entree: convertir  OPT: retour");break;}
+ case View::MORSE_RESULT: {
+   String shown=morseOutput.length()>120?morseOutput.substring(morseOutput.length()-120):morseOutput;
+   drawLines("RESULTAT MORSE",
+     shown.substring(0,30),
+     shown.length()>30?shown.substring(30,60):"",
+     shown.length()>60?shown.substring(60,90):"",
+     shown.length()>90?shown.substring(90):"",
+     "OPT: retour");break;}
  case View::VOICE_ARCHIVE: {
    if(!sdReady){drawLines("ARCHIVES VOCALES","Inserer une microSD"," puis detecter microSD","OPT: retour");break;}
    if(!voiceCount){drawLines("ARCHIVES VOCALES","Aucun vocal archive","Les vocaux recus sont","sauvegardes automatiquement","OPT: retour");break;}
