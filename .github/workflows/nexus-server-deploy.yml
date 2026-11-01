@@ -29,6 +29,24 @@ jobs:
           for secret in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID NEXUS_ALICE_TOKEN NEXUS_BOB_TOKEN; do
             if [ -z "${!secret}" ]; then echo "Missing GitHub secret: $secret"; exit 1; fi
           done
+      - name: Diagnose Cloudflare API account and access
+        run: |
+          node --input-type=module - <<'NODE'
+          const id = process.env.CLOUDFLARE_ACCOUNT_ID || '';
+          const token = process.env.CLOUDFLARE_API_TOKEN || '';
+          console.log('Account ID has 32 hex characters:', /^[a-f0-9]{32}$/i.test(id));
+          console.log('Account ID matches Cloudflare dashboard:', id === 'd193a5bdf26c5d89d56d29400f9dfbfe');
+          async function check(path) {
+            try {
+              const r = await fetch('https://api.cloudflare.com/client/v4/' + path, {headers:{Authorization:'Bearer '+token}});
+              const j = await r.json();
+              const codes = (j.errors||[]).map(e=>e.code);
+              console.log(path.split('/').slice(-2).join('/'), 'HTTP',r.status,'success',j.success===true,'error codes',JSON.stringify(codes));
+            } catch(e) { console.log('Cloudflare API test failed:',e.name); }
+          }
+          await check('accounts/'+id+'/tokens/verify');
+          await check('accounts/'+id+'/d1/database');
+          NODE
       - name: Deploy D1 and Worker, then smoke-test authentication
         working-directory: nexus-adv/cloudflare
         run: node deploy-ci.mjs
