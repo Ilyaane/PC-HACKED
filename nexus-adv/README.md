@@ -1,74 +1,77 @@
-# NEXUS Messagerie pour Cardputer ADV — v0.7 (stabilité clavier/Wi-Fi)
+# NEXUS Messagerie pour Cardputer ADV — v0.8
 
-Projet **M5Stack Cardputer ADV** (ESP32-S3, 8 Mo de flash). La v0.7 conserve les fonctions texte et vocal, le code commun et les réseaux enregistrés. Elle corrige la navigation sans Fn dans les menus, limite les rafraîchissements de l'écran et vérifie les écritures NVS pour éviter les faux messages « sauvegardé ». Le serveur Cloudflare Workers + D1 **NEXUS** a été déployé et testé avec les jetons existants à l'adresse `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Le nouveau firmware v0.7 doit être validé par la compilation GitHub Actions et par des essais réels sur Cardputer ADV avant d'être considéré comme testé matériellement.
+**NEXUS** est une application autonome légère pour M5Stack Cardputer ADV, développée sous PlatformIO / Arduino. La version v0.8 conserve la messagerie texte, la messagerie vocale WAV, le serveur Cloudflare D1, les jetons partagés et le Wi-Fi mémorisé. Elle réorganise complètement les menus, ajoute des archives vocales sur microSD et des outils Morse.
 
-## Menus et navigation
+## Interface à cinq rubriques
 
-L'accueil contient un menu noir avec texte blanc et sélection cyan, défilant par cinq choix visibles :
+L'écran d'accueil a cinq tuiles horizontales avec icônes vectorielles dessinées par le firmware : **Messages**, **Vocaux**, **Morse**, **Wi-Fi** et **Système**.
 
-1. Messages reçus
-2. Écrire un message
-3. Messages envoyés
-4. Enregistrer un message vocal WAV
-5. Envoyer le message vocal
-6. Écouter un message vocal
-7. Réseaux Wi-Fi
-8. Paramètres NEXUS
-9. Diagnostics
-10. Détecter la microSD
-11. Effacer un vocal en attente
+- **Accueil :** `,` = gauche, `/` = droite, **Entrée** = ouvrir la rubrique.
+- **Dans les rubriques :** `;` = monter, `.` = descendre, **Entrée** = ouvrir l'action.
+- **Retour :** **OPT**.
+- Ces touches fonctionnent sans Fn **uniquement dans les menus**; dans la saisie texte, la ponctuation conserve sa signification.
+- L'interface est noire, blanche et cyan avec icônes originales et l'en-tête « NEXUS » (le numéro v0.8 apparaît uniquement dans la documentation).
 
-**Naviguer** : `Fn + ;` = haut, `Fn + .` = bas, `Entrée` = choisir. `Fn + \`` = retour (Esc). Dans l'historique, `Fn + ,` et `Fn + /` changent de page. Ces combinaisons correspondent au clavier réel de M5Cardputer 1.1.1; ce modèle n'a pas de touches flèches indépendantes. Les lettres T/C/W/etc. ne sont plus requises pour se déplacer dans les menus. Un témoin Wi-Fi et le dernier état de connexion sont affichés.
+La rubrique **Messages** regroupe réception, rédaction et envoi. **Vocaux** regroupe enregistrement, envoi, archives et lecture. **Wi-Fi** gère les réseaux mémorisés. **Système** regroupe configuration, diagnostics et microSD.
 
-Le firmware conserve les fonctions de la version précédente (texte, reçu/envoyé, audio WAV, microSD, brouillons persistants, HTTPS, accusés de lecture).
+## Archives automatiques de messages vocaux reçus
 
-## Réseaux Wi-Fi
+À réception de chaque nouveau message vocal, NEXUS télécharge automatiquement son fichier WAV depuis le serveur **sur la microSD**, le valide, puis l'enregistre sans remplacer les vocaux précédents. Les fichiers sont rangés par date (fuseau Réunion UTC+04:00), expéditeur et identifiant.
 
-- Le firmware conserve **jusqu'à cinq réseaux** et leurs mots de passe en NVS (migration de l'ancien réseau enregistré).
-- Au démarrage, il réessaie le dernier réseau, puis les autres déjà enregistrés si nécessaire.
-- Un réseau connu apparaît avec `[MEM]` lors de la recherche Wi-Fi : **Entrée reconnecte sans retaper le mot de passe**.
-- Sur un réseau inconnu, le mot de passe apparaît **en clair pendant la saisie**, sans étoiles. Évite de le saisir devant des personnes qui ne doivent pas le connaître.
-- La suppression du réseau courant demande confirmation. Les autres réseaux mémorisés restent intacts.
+Exemple :
 
-**Important à la mise à jour :** flasher uniquement `firmware.bin` à l'adresse **0x10000** et **ne pas effacer la mémoire complète** permet normalement de conserver les données NVS (Wi-Fi et configuration). L'image complète `NEXUS_ADV_full_flash_0x0.bin` écrite à `0x0` peut effacer les réglages NVS; refaire alors la configuration.
+```
+/NEXUS/
+  MESSAGES_VOCAUX/
+    INDEX.txt
+    RECUS/
+      2026/
+        11/
+          01/
+            alice/
+              2026-11-01_13-45-22_alice_ID42.wav
+            bob/
+              2026-11-01_14-01-08_bob_ID43.wav
+```
 
-## Deux Cardputer, un même code
+Les messages sont indexés dans `INDEX.txt`. La liste sur l'appareil affiche les **24 derniers éléments** pour limiter l'usage de RAM; les WAV plus anciens restent sur la carte SD et sont accessibles depuis un ordinateur.
 
-Dans le mode partagé, **le même code de connexion est saisi sur les deux appareils**, dès 10 caractères. Il ne doit **pas** être publié dans le code source. Le serveur identifie ensuite les demandes grâce à un champ `X-Nexus-User` dérivé du destinataire configuré sur chaque Cardputer.
+- Le téléchargement se fait dans un fichier temporaire `.part`; une validation d'en-tête et de taille précède le renommage final.
+- Si l'enregistrement de la voix échoue (microSD pleine, déconnectée, erreur réseau), NEXUS **ne fait pas avancer le curseur de réception**, ce qui permet une nouvelle tentative plutôt que de perdre le vocal.
+- Le dossier et l'index sont créés automatiquement au premier vocal reçu. Le nom utilise l'heure transmise par le serveur; si celle-ci est invalide, classement sous `DATE_INCONNUE`.
+- Il faut une microSD correctement formatée. Sans microSD, pas d'archive locale vocale.
+- Les WAV sont des fichiers audio ordinaires **non chiffrés sur la carte SD**; protéger la carte si les messages sont privés.
 
-- Cardputer 1 : code partagé, **correspondant** `bob` ; l'application se présente comme **alice**.
-- Cardputer 2 : même code partagé, **correspondant** `alice` ; l'application se présente comme **bob**.
-- Les deux appareils ont la même adresse HTTPS `https://nexus-messagerie.ilyaane-patel1.workers.dev`.
+## Outils Morse
 
-### Activation du mode partagé dans GitHub
+- **Écrire en Morse** : convertir un texte en points et tirets affichés.
+- **Jouer le Morse** : générer des sons au haut-parleur à partir du texte.
+- **Décoder son du micro (bêta)** : essayer de reconnaître des impulsions sonores de type 880 Hz enregistrées au micro pendant une courte durée. Ce mode est **expérimental** : son efficacité dépend du volume, du bruit ambiant et de la cadence; il ne permet pas de comprendre toutes les sources audio ou les enregistrements quelconques.
 
-Le seul nouveau secret GitHub nécessaire est **`NEXUS_SHARED_TOKEN`**. Entrer la valeur du code choisi dans GitHub > dépôt PC-HACKED > Settings > Secrets and variables > Actions. Le code ne doit pas être ajouté à un fichier suivi par Git. Ensuite relancer le workflow **NEXUS Server - Cloudflare deploy and smoke tests**.
+Les alphabets A–Z, les chiffres 0–9 et plusieurs signes de ponctuation sont gérés. Les sons sont des créations synthétiques originales, et non de la musique protégée.
 
-**Tant que `NEXUS_SHARED_TOKEN` n'est pas renseigné**, le serveur fonctionne avec ses anciens jetons distincts `NEXUS_ALICE_TOKEN` et `NEXUS_BOB_TOKEN` pour préserver les installations existantes. **Quand le mode partagé est activé**, les anciens jetons ne donnent plus accès au serveur.
+## Wi-Fi, paramètres et sécurité
 
-### Limite importante de sécurité
+Cinq Wi-Fi peuvent être mémorisés. La reconnexion utilise les mots de passe sauvegardés dans la mémoire NVS interne, pas dans la microSD. La saisie Wi-Fi est visible sans étoiles. Le firmware relit les valeurs critiques après enregistrement pour signaler une erreur NVS.
 
-Un code facile à deviner et connu des deux appareils est **moins sûr** que deux jetons aléatoires. Chaque personne connaissant le code peut demander à agir comme Alice **ou** comme Bob, car le rôle est déclaré par l'appareil et non prouvé cryptographiquement. **Ne pas utiliser pour des échanges confidentiels ou sensibles**, et privilégier un code aléatoire plus long si les appareils communiquent sur Internet. Les messages ne sont pas chiffrés de bout en bout. Les mots de passe Wi-Fi restent stockés en NVS et peuvent être lus en cas d'accès physique.
+Les deux Cardputer utilisent la même adresse : `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Dans le mode partagé :
+- appareil Alice : destinataire `bob`,
+- appareil Bob : destinataire `alice`,
+- le secret de connexion est défini exclusivement dans GitHub Actions comme `NEXUS_SHARED_TOKEN`, jamais dans ce dépôt.
 
-## Compilation et vérification
+Un code partagé facile à deviner **n'offre pas une authentification indépendante** entre les deux appareils. La messagerie n'utilise pas de chiffrement de bout en bout.
 
-Workflow : `.github/workflows/nexus-adv-build.yml`. Il lance :
-- les tests API Node/SQLite,
-- les vérifications statiques,
-- la compilation PlatformIO M5Cardputer ADV,
-- le contrôle de l'en-tête ESP32 et la création des deux fichiers firmware.
+## M5 Launcher / WebUI : quel fichier utiliser ?
 
-L'artifact GitHub contient `firmware.bin` (pour l'offset 0x10000) et `NEXUS_ADV_full_flash_0x0.bin` (pour 0x0). Les tests automatiques ne prouvent pas la qualité de l'écran sur un matériel physique. Tester les flèches, la connexion sans ressaisie du Wi-Fi, la saisie visible et l'envoi/réception texte et vocal sur **deux appareils**.
+Ce projet est pensé pour fonctionner à côté de Bruce, KVX Puter et des autres firmwares chargés par M5 Launcher sur microSD, sans dépendance à leur code et sans module LoRa ou GPS.
 
-Le projet NEXUS utilise le Worker `nexus-messagerie` et la base D1 `nexus-messagerie`. Il ne doit pas toucher au projet Déclic Cloudflare Pages.
+- Dans un dossier de microSD `ADV Nexus`, enregistrer de préférence **`firmware.bin`** (application uniquement) et l'installer par la fonction habituelle de M5 Launcher / WebUI.
+- L'autre fichier, **`NEXUS_ADV_full_flash_0x0.bin`**, comprend chargeur de démarrage, partitions et application; **ne pas le lancer comme une application ordinaire depuis la liste M5 Launcher**. Il sert aux opérations complètes de reflash depuis un outil compatible en mode USB.
+- Ne pas changer la table des partitions ni effacer complètement la mémoire du Cardputer déjà fonctionnel.
+- Selon la table de partitions active et la méthode utilisée par Launcher, le changement de firmware peut affecter les réglages NVS. Vérifier Wi-Fi, code et destinataire après installation et redémarrage.
 
+## Vérifications et limites
 
-## Correctifs v0.7
+Le workflow GitHub `.github/workflows/nexus-adv-build.yml` exécute les tests API Cloudflare, les vérifications statiques du projet, la compilation ESP32-S3 par PlatformIO et les contrôles des images binaires. Un succès de compilation **ne prouve pas** le fonctionnement physique du microphone, du haut-parleur, du comportement d'écran ou de la microSD sur les deux appareils.
 
-- Dans les menus : `;` monter, `.` descendre, Entrée valider, OPT revenir, **sans Fn**.
-- Dans les champs de saisie : ponctuation normale, sans quitter le champ quand on tape une virgule.
-- L'affichage ne se vide plus complètement à chaque touche : rafraîchissement des lignes et sélections nécessaires uniquement.
-- L'enregistrement de l'adresse, du jeton et du Wi-Fi est **contrôlé par relecture immédiate** dans Preferences/NVS. Le message d'erreur signale les écritures qui échouent.
-- Menu **Diagnostics** : affiche le rôle ALICE/BOB, l'état du Wi-Fi, du serveur, de la mémoire NVS et la présence du code / de l'adresse, sans afficher les secrets.
-
-Deux Cardputer peuvent présenter des résultats différents avec le même `.bin` : états NVS/partition, réseau Wi-Fi et configuration mémorisée varient. Si l'un perd ses paramètres après redémarrage, vérifier « Diagnostics > NVS ». Un flashage complet à `0x0` est une opération distincte qui peut modifier/effacer la configuration préexistante; ne pas l'effectuer sur le Cardputer opérationnel sans sauvegarde. Un simple fichier `firmware.bin` s'installe à `0x10000` **uniquement si la table des partitions installée correspond bien à la compilation**. Ne pas intervertir les adresses.
+Tests matériels à effectuer : menu horizontal/vertical, absence de clignotement, connexion Wi-Fi et préservation NVS sur les deux Cardputer, envoi d'un vocal Alice → Bob, présence de son WAV dans le dossier de la bonne date sur microSD, lecture de l'archive, Morse texte et audio puis décodage expérimental. Déclic et son hébergement Cloudflare Pages sont totalement extérieurs au projet NEXUS.
