@@ -536,18 +536,21 @@ void openHomeSelection(){
   }
 }
 void handleInput(){
-  // Library v1.1.1 uses Fn+;/. for arrows and Fn+backtick for Esc.
-  // isChange() only checks the number of pressed keys, so track whole chord instead.
+  // In menus the physical ; . , / keys work as arrows WITHOUT Fn.
+  // Text/password editors retain their normal punctuation keys.
+  // Fn+arrows remain supported. Change detection includes direction keys.
   static String lastChord="";
   if(!M5Cardputer.Keyboard.isPressed()){lastChord="";return;}
   const auto k=M5Cardputer.Keyboard.keysState();
-  const bool escPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('`');
-  const bool upPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed(';');
-  const bool downPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('.');
-  const bool leftPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed(',');
-  const bool rightPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('/');
+  const bool escPressed=k.esc || (k.fn && M5Cardputer.Keyboard.isKeyPressed('`'));
+  const bool upPressed=k.up || M5Cardputer.Keyboard.isKeyPressed(';');
+  const bool downPressed=k.down || M5Cardputer.Keyboard.isKeyPressed('.');
+  const bool leftPressed=k.left || M5Cardputer.Keyboard.isKeyPressed(',');
+  const bool rightPressed=k.right || M5Cardputer.Keyboard.isKeyPressed('/');
   String chord=String(k.fn?"F":"f")+String(k.shift?"S":"s")+
-    String(k.enter?"E":"")+String(k.del?"D":"");
+    String(k.enter?"E":"")+String(k.del?"D":"")+
+    String(upPressed?"U":"")+String(downPressed?"V":"")+
+    String(leftPressed?"L":"")+String(rightPressed?"R":"");
   for(char ch:k.word)chord+=ch;
   if(chord==lastChord)return;
   lastChord=chord;
@@ -563,14 +566,16 @@ void handleInput(){
   }
   const bool choose=k.enter||rightPressed;
   if(view==View::HOME){
-    if(upPressed)homeIndex=(homeIndex+HOME_COUNT-1)%HOME_COUNT;
-    if(downPressed)homeIndex=(homeIndex+1)%HOME_COUNT;
+    bool moved=false;
+    if(upPressed){homeIndex=(homeIndex+HOME_COUNT-1)%HOME_COUNT;moved=true;}
+    if(downPressed){homeIndex=(homeIndex+1)%HOME_COUNT;moved=true;}
     if(choose){openHomeSelection();return;}
-    paint();return;
+    if(moved)paint();return;
   }
   if(view==View::CONFIG){
-    if(upPressed)configIndex=(configIndex+CONFIG_COUNT-1)%CONFIG_COUNT;
-    if(downPressed)configIndex=(configIndex+1)%CONFIG_COUNT;
+    bool moved=false;
+    if(upPressed){configIndex=(configIndex+CONFIG_COUNT-1)%CONFIG_COUNT;moved=true;}
+    if(downPressed){configIndex=(configIndex+1)%CONFIG_COUNT;moved=true;}
     if(choose){
       switch(configIndex){
         case 0:input=serverUrl;changeView(View::EDIT_URL);return;
@@ -579,11 +584,12 @@ void handleInput(){
         case 3:wifiSetup();return;
       }
     }
-    paint();return;
+    if(moved)paint();return;
   }
   if(view==View::WIFI_CONFIRM){
-    if(upPressed)confirmIndex=(confirmIndex+2)%3;
-    if(downPressed)confirmIndex=(confirmIndex+1)%3;
+    bool moved=false;
+    if(upPressed){confirmIndex=(confirmIndex+2)%3;moved=true;}
+    if(downPressed){confirmIndex=(confirmIndex+1)%3;moved=true;}
     if(choose){
       if(confirmIndex==0){
         if(connectSaved())serverTest();changeView(View::HOME);return;
@@ -591,15 +597,16 @@ void handleInput(){
       if(confirmIndex==1){scanWifi();return;}
       if(confirmIndex==2){changeView(View::DELETE_CONFIRM);return;}
     }
-    paint();return;
+    if(moved)paint();return;
   }
   if(view==View::WIFI_LIST){
+    bool moved=false;
     if(scanCount){
-      if(upPressed)wifiIndex=(wifiIndex+scanCount-1)%scanCount;
-      if(downPressed)wifiIndex=(wifiIndex+1)%scanCount;
+      if(upPressed){wifiIndex=(wifiIndex+scanCount-1)%scanCount;moved=true;}
+      if(downPressed){wifiIndex=(wifiIndex+1)%scanCount;moved=true;}
       if(choose){chooseWiFi(wifiIndex);return;}
     }
-    paint();return;
+    if(moved)paint();return;
   }
   if(view==View::DELETE_CONFIRM){
     if(choose){
@@ -657,7 +664,7 @@ void handleInput(){
       }
       if(view==View::COMPOSE){sendText();return;}
     }
-    paint();return;
+    if(edited || k.enter)paint();return;
   }
   if(view==View::HISTORY){
     bool changed=false;
