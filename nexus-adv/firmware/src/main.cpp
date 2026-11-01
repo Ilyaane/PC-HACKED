@@ -35,7 +35,7 @@ String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
@@ -43,6 +43,8 @@ bool scanSaved[24]={}, scanOpen[24]={};
 uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
 constexpr uint8_t HOME_COUNT=5, CONFIG_COUNT=4, WIFI_SLOTS=5;
 uint8_t sectionIndex=0, morseMode=0;
+uint8_t morseWpm=12; char morseQuizLetter='A'; bool morseQuizAnswered=false;
+String morseQuizAnswer;
 String morseOutput;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
 uint8_t textPage=0, voiceSelection=0, voiceCount=0;
@@ -123,7 +125,7 @@ int sectionOptions(int section,String items[]){
   if(section==0){items[0]="Boite de reception";items[1]="Nouveau message";items[2]="Messages envoyes";return 3;}
   if(section==1){items[0]="Enregistrer un vocal";items[1]="Envoyer le vocal";items[2]="Archives microSD";
     items[3]="Ecouter dernier vocal";items[4]="Effacer brouillon vocal";return 5;}
-  if(section==2){items[0]="Ecrire en Morse";items[1]="Jouer le Morse (son)";items[2]="Decoder son du micro (beta)";return 3;}
+  if(section==2){items[0]="Ecrire en Morse";items[1]="Jouer le Morse (son)";items[2]="Decoder son (beta)";items[3]="Entrainement auditif";items[4]="Vitesse : "+String(morseWpm)+" MPM";return 5;}
   if(section==3){items[0]="Gerer les reseaux Wi-Fi";items[1]="Etat reseau";return 2;}
   items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]="Detecter la microSD";return 3;
 }
@@ -195,6 +197,9 @@ void paint(){
      tail.length()>30?tail.substring(30,60):"",
      tail.length()>60?tail.substring(60):"",
      "Entree: convertir  OPT: retour");break;}
+ case View::MORSE_TRAIN:drawLines("MORSE : ENTRAINEMENT",
+     "Ecoute et tape la lettre",morseQuizAnswered?("Reponse: "+String(morseQuizLetter)):("A toi: "+morseQuizAnswer),
+     "Vitesse: "+String(morseWpm)+" MPM",morseQuizAnswered?"Entree: nouveau test":"Entree: verifier", "OPT: retour");break;
  case View::MORSE_RESULT: {
    String shown=morseOutput.length()>120?morseOutput.substring(morseOutput.length()-120):morseOutput;
    drawLines("RESULTAT MORSE",
@@ -320,6 +325,7 @@ void loadSettings(){
   if(!wifiSsid.isEmpty() && wifiSlot(wifiSsid)<0)rememberNetwork(wifiSsid,wifiPass); // migrate old NVS
   serverUrl=prefs.getString("server",""); deviceToken=prefs.getString("token","");
   recipient=prefs.getString("peer","bob"); editor=prefs.getString("draft","");
+  morseWpm=(uint8_t)constrain((int)prefs.getUInt("morsewpm",12u),5,30);
   pendingTextId=prefs.getString("txtid",""); pendingVoiceId=prefs.getString("vocid","");
   cursor=prefs.getUInt("cursor",0);lastVoiceId=prefs.getUInt("voice",0);
 }
@@ -801,7 +807,7 @@ void playMorseAudio(const String& encoded){
   if(encoded.isEmpty()){setStatus("Texte non compatible Morse");return;}
   M5Cardputer.Mic.end();M5Cardputer.Speaker.setVolume(75);
   if(!M5Cardputer.Speaker.begin()){setStatus("Haut-parleur indisponible");return;}
-  constexpr uint32_t unit=120; // dot=120ms, dash=360ms, international gaps
+  const uint32_t unit=1200u/morseWpm; // standard PARIS timing, one dit = 1200/WPM ms
   bool aborted=false;
   for(size_t i=0;i<encoded.length();i++){
     const char c=encoded[i];
@@ -897,7 +903,17 @@ void openSectionSelection(){
     }
   }else if(homeIndex==2){
     if(sectionIndex==2){decodeMorseMicrophone();}
-    else{morseMode=sectionIndex;input="";changeView(View::MORSE_EDIT);}
+    else if(sectionIndex==3){
+      morseQuizLetter=(char)('A'+(esp_random()%26));
+      morseQuizAnswered=false;morseQuizAnswer="";
+      changeView(View::MORSE_TRAIN);
+      playMorseAudio(NexusMorse::encode(String(morseQuizLetter)));
+      paint();
+    }else if(sectionIndex==4){
+      morseWpm=(uint8_t)(morseWpm>=30?5:morseWpm+1);
+      prefs.putUInt("morsewpm",morseWpm);
+      setStatus("Morse: "+String(morseWpm)+" mots/min");paint();
+    }else{morseMode=sectionIndex;input="";changeView(View::MORSE_EDIT);}
   }else if(homeIndex==3){
     if(sectionIndex==0)wifiSetup();
     else changeView(View::DIAG);
@@ -942,7 +958,7 @@ void handleInput(){
     }else if(view==View::EDIT_URL || view==View::EDIT_TOKEN || view==View::EDIT_PEER){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
-    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::VOICE_ARCHIVE)
+    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN || view==View::VOICE_ARCHIVE)
       changeView(View::SECTION);
     else if(view==View::SECTION)changeView(View::HOME);
     else{changeView(View::SECTION);}
@@ -963,6 +979,20 @@ void handleInput(){
     if(downPressed){sectionIndex=(sectionIndex+1)%count;moved=true;}
     if(choose){openSectionSelection();return;}
     if(moved)paint();return;
+  }
+  if(view==View::MORSE_TRAIN){
+    if(morseQuizAnswered){
+      if(k.enter){morseQuizLetter=(char)(\'A\'+(esp_random()%26));
+        morseQuizAnswered=false;morseQuizAnswer=\"\";
+        playMorseAudio(NexusMorse::encode(String(morseQuizLetter)));paint();}
+    }else{
+      if(k.del&&morseQuizAnswer.length())morseQuizAnswer.remove(morseQuizAnswer.length()-1);
+      for(char ch:k.word)if(isalpha((unsigned char)ch)&&morseQuizAnswer.length()<1)morseQuizAnswer+=String((char)toupper((unsigned char)ch));
+      if(k.enter){morseQuizAnswered=true;
+        setStatus(morseQuizAnswer==String(morseQuizLetter)?\"Bonne reponse !\":\"Essaye encore / nouvelle lettre\");}
+      paint();
+    }
+    return;
   }
   if(view==View::VOICE_ARCHIVE){
     if(voiceCount){
