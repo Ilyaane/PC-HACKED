@@ -14,8 +14,8 @@ for (const name of ['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','NEXUS_ALICE_
 }
 const alice = process.env.NEXUS_ALICE_TOKEN;
 const bob = process.env.NEXUS_BOB_TOKEN;
-if (alice === bob || alice.length < 32 || bob.length < 32 || alice.length > 160 || bob.length > 160) {
-  throw new Error('Device tokens must be distinct, with 32-160 characters. No deployment attempted.');
+if (alice === bob || alice.length < 12 || bob.length < 12 || alice.length > 160 || bob.length > 160) {
+  throw new Error('Device tokens must be distinct, with 12-160 characters. No deployment attempted.');
 }
 
 const root = process.cwd();
