@@ -24,7 +24,11 @@ checks={
  'Wi-Fi saved only after readback': 'const bool saved=saveSetting("pwd",pass) && saveSetting("ssid",ssid) && rememberNetwork(ssid,pass)' in cpp,
  'Diagnostics show selected role and NVS state': 'Appareil: ' in cpp and 'NVS: ' in cpp,
 
- 'No letter shortcut menu': "case 't':case 'T'" not in cpp and 'openHomeSelection()' in cpp,
+ 'Horizontal icon home': 'void drawHome()' in cpp and 'case View::HOME:drawHome()' in cpp,
+ 'Section-based navigation': 'void openSectionSelection()' in cpp and 'case View::SECTION:' in cpp,
+ 'Morse code library': (root/'firmware/include/nexus_morse.h').exists(),
+ 'Voice archive path and index': 'VOICE_ROOT' in cpp and 'saveVoiceArchive(' in cpp and 'VOICE_INDEX' in cpp,
+ 'No letter shortcut menu': "case 't':case 'T'" not in cpp and 'openSectionSelection()' in cpp,
  'Wi-Fi password is visible': 'case View::WIFI_PASSWORD' in cpp and 'shown=input.length()' in cpp,
  'Five saved Wi-Fi slots': 'WIFI_SLOTS=5' in cpp and 'rememberNetwork(' in cpp and 'wifiSlot(' in cpp,
  'Saved Wi-Fi reused': "scanSaved[selected]" in cpp or "const int saved=wifiSlot(wifiSsid)" in cpp,
