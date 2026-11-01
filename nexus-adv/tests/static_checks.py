@@ -20,7 +20,11 @@ checks={
  'Wi-Fi password is visible': 'case View::WIFI_PASSWORD' in cpp and 'shown=input.length()' in cpp,
  'Five saved Wi-Fi slots': 'WIFI_SLOTS=5' in cpp and 'rememberNetwork(' in cpp and 'wifiSlot(' in cpp,
  'Saved Wi-Fi reused': "scanSaved[selected]" in cpp or "const int saved=wifiSlot(wifiSsid)" in cpp,
- 'Device minimum is 12': 'deviceToken.length()>=12' in cpp and 'input.length()<12' in cpp,
+ 'Shared code minimum is 10': 'deviceToken.length()>=10' in cpp and 'input.length()<10' in cpp,
+ 'Device role declared to Worker': 'http.addHeader("X-Nexus-User"' in cpp,
+ 'Device role linked to recipient': 'recipient=="bob"?"alice":"bob"' in cpp,
+ 'Shared token accepted by server': 'env.SHARED_TOKEN' in worker and 'request.headers.get(\'X-Nexus-User\')' in worker,
+
 
  'WAV streamed to microSD': 'f.write((uint8_t*)audio,sizeof(audio))' in cpp,
  'WAV uploaded from SD': 'http.sendRequest("POST",&f,f.size())' in cpp,
