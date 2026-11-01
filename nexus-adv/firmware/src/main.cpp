@@ -1,4 +1,4 @@
-/* NEXUS ADV v0.8.0 SOURCE - Cardputer ADV ONLY.
+/* NEXUS ADV v0.9.0 DEVELOPMENT SOURCE - Cardputer ADV ONLY.
  * Requires M5Cardputer >=1.1.1, microSD for audio; zero PSRAM allocation.
  * Wi-Fi credentials and device token are configured on the keyboard and saved in NVS.
  * Not hardware-certified: see VERIFICATION.md before flashing.
@@ -34,6 +34,9 @@ String wifiSsid, wifiPass, serverUrl, deviceToken, recipient="bob", editor, stat
 String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
+uint32_t unreadCount=0, latestUnreadId=0;
+String latestUnreadPreview, latestUnreadSender;
+bool unreadSynced=false;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
 enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
@@ -138,6 +141,9 @@ void drawHome(){
   l.fillRoundRect(3,3,234,22,5,COL_PANEL);
   l.setTextColor(COL_TEXT,COL_PANEL);l.setTextSize(1);l.setCursor(12,11);l.print("NEXUS");
   l.fillCircle(211,14,4,WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN);
+  l.fillRoundRect(155,5,45,16,4,unreadCount?COL_ACCENT:COL_PANEL);
+  l.setTextSize(1);l.setTextColor(unreadCount?COL_BG:COL_MUTED,unreadCount?COL_ACCENT:COL_PANEL);
+  l.setCursor(160,10);l.print(String(unreadCount>99?"99+":String(unreadCount))+" nouv");
   const int cx=120,cy=68;
   l.fillRoundRect(52,30,136,76,12,COL_PANEL);
   l.drawRoundRect(52,30,136,76,12,COL_ACCENT);
@@ -174,7 +180,10 @@ void drawHome(){
   l.fillTriangle(25,65,36,59,36,71,COL_ACCENT);
   l.fillTriangle(215,65,204,59,204,71,COL_ACCENT);
   l.setTextColor(COL_MUTED,COL_BG);
-  l.setCursor(8,117);l.print("< ,     / >       Entree");
+  l.setCursor(8,117);
+  if(unreadCount && latestUnreadSender.length())
+    l.print(clipped("Nouveau "+latestUnreadSender+": "+latestUnreadPreview,31));
+  else l.print("< ,     / >       Entree");
   l.setCursor(197,117);l.print(String(homeIndex+1)+"/5");
 }
 
@@ -325,6 +334,7 @@ void loadSettings(){
   if(!wifiSsid.isEmpty() && wifiSlot(wifiSsid)<0)rememberNetwork(wifiSsid,wifiPass); // migrate old NVS
   serverUrl=prefs.getString("server",""); deviceToken=prefs.getString("token","");
   recipient=prefs.getString("peer","bob"); editor=prefs.getString("draft","");
+  unreadCount=prefs.getUInt("unread",0);unreadSynced=false;
   morseWpm=(uint8_t)constrain((int)prefs.getUInt("morsewpm",12u),5,30);
   pendingTextId=prefs.getString("txtid",""); pendingVoiceId=prefs.getString("vocid","");
   cursor=prefs.getUInt("cursor",0);lastVoiceId=prefs.getUInt("voice",0);
@@ -576,6 +586,27 @@ void listVoiceArchives(){
   }f.close();
 }
 
+bool refreshUnread(){
+  if(!configured() || WiFi.status()!=WL_CONNECTED)return false;
+  WiFiClientSecure client;HTTPClient http;
+  if(!openHttp(http,client,"/unread"))return false;
+  const int code=http.GET();const String payload=code==200?http.getString():"";
+  http.end();
+  if(code!=200)return false; // Old server still supports other features.
+  JsonDocument doc;if(deserializeJson(doc,payload))return false;
+  const uint32_t n=doc["unread"]|0u;
+  const uint32_t id=doc["latest"]["id"]|0u;
+  const String from=doc["latest"]["sender"]|"";
+  const String preview=doc["latest"]["preview"]|"";
+  const bool changed=unreadCount!=n || latestUnreadId!=id;
+  if(unreadCount!=n && prefsReady)prefs.putUInt("unread",n);
+  unreadCount=n;latestUnreadId=id;
+  latestUnreadSender=from;latestUnreadPreview=clipped(preview,48);
+  unreadSynced=true;
+  if(changed && (view==View::HOME || view==View::SECTION))paint();
+  return true;
+}
+
 void pollInbox(){
   if(!configured()||WiFi.status()!=WL_CONNECTED)return;
   WiFiClientSecure client;HTTPClient http;
@@ -636,6 +667,7 @@ void acknowledgeMessage(uint32_t id){
   const int result=http.POST((uint8_t*)nullptr,0);
   http.end();
   if(result!=200)setStatus("Accuse lecture non transmis");
+  else refreshUnread();
 }
 void sendText(){
   editor.trim();if(editor.isEmpty())return;
@@ -1138,7 +1170,9 @@ void setup(){
  M5Cardputer.Display.setRotation(1);
  loadSettings();initSd();paint();
  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
- if(connectRememberedWiFi()){serverTest();}
+ if(connectRememberedWiFi()){
+    if(serverTest()){pollInbox();refreshUnread();}
+  }
   else if(!storageFault){setStatus("Choisir le Wi-Fi dans le menu");}
  paint();
 }
@@ -1153,7 +1187,7 @@ void loop(){
    if(configured()){
      if(!serverReady)serverTest();
      if(serverReady){
-       pollInbox();
+       pollInbox();refreshUnread();
        // A send explicitly attempted earlier may be retried once online.
        // The original client id prevents duplicate delivery on lost responses.
        if(pendingTextId.length() && !editor.isEmpty())sendText();
