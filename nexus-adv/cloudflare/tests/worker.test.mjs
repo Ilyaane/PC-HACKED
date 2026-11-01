@@ -39,6 +39,23 @@ test('health and absent secrets; access control',async()=>{
  assert.equal((await worker.fetch(req('GET','/session',bob),env)).status,200);
  env.BOB_TOKEN=env.ALICE_TOKEN;assert.equal((await worker.fetch(req('GET','/session',alice),env)).status,503);
 });
+test('12-character device tokens authenticate, 11-character tokens are rejected',async()=>{
+ const env=makeEnv();
+ const a='Novyrax_974!';
+ const b='Kelviro_974!';
+ assert.equal(a.length,12);
+ assert.equal(b.length,12);
+ env.ALICE_TOKEN=a;
+ env.BOB_TOKEN=b;
+ assert.equal((await worker.fetch(req('GET','/session',a),env)).status,200);
+ assert.equal((await worker.fetch(req('GET','/session',b),env)).status,200);
+ assert.equal((await worker.fetch(req('GET','/session','Novyra_974!'),env)).status,401);
+ assert.equal((await worker.fetch(req('GET','/session',a.slice(0,11)),env)).status,401);
+ assert.equal((await sendText(env,a,'bob','Essai avec 12 caracteres','short_token_msg_1')).status,200);
+ const r=await worker.fetch(req('GET','/messages',b),env);
+ assert.equal(r.status,200);
+ assert.equal((await r.json()).messages[0].text,'Essai avec 12 caracteres');
+});
 test('text store and forward, pagination, idempotency, isolation, read receipts',async()=>{
  const env=makeEnv();const id='ABCD_01234567890';
  let r=await sendText(env,alice,'bob','Salut !',id);assert.equal(r.status,200);
