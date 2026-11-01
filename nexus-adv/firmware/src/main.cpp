@@ -27,6 +27,8 @@ constexpr char TX_AUDIO[]="/nexus_tx.wav", RX_AUDIO[]="/nexus_rx.wav", TMP_RX[]=
 constexpr char HISTORY[]="/nexus_history.txt";
 constexpr char VOICE_ROOT[]="/NEXUS/MESSAGES_VOCAUX";
 constexpr char VOICE_INDEX[]="/NEXUS/MESSAGES_VOCAUX/INDEX.txt";
+constexpr char TEXT_ROOT[]="/NEXUS/MESSAGES_TEXTE";
+constexpr uint8_t HISTORY_CAP=24;
 constexpr uint8_t VOICE_LIST_MAX=24;
 
 Preferences prefs;
@@ -55,7 +57,7 @@ struct VoiceArchive {uint32_t id=0; String sender,stamp,path;};
 VoiceArchive voiceArchives[VOICE_LIST_MAX];
 bool fullRepaint=true;
 struct History {uint32_t id=0; String sender,kind,body;};
-History history[8];
+History history[HISTORY_CAP];
 uint8_t historySize=0;
 
 String masked(size_t count){String s;for(size_t i=0;i<count && i<40;i++)s+='*';return s;}
@@ -346,13 +348,13 @@ void loadHistory(){
     String line=f.readStringUntil('\n');line.trim();if(line.isEmpty())continue;
     int a=line.indexOf('|'),b=line.indexOf('|',a+1),c=line.indexOf('|',b+1);
     if(a<=0||b<=a||c<=b)continue;
-    if(historySize==8){for(int k=1;k<8;k++)history[k-1]=history[k];historySize--;}
+    if(historySize==HISTORY_CAP){for(int k=1;k<HISTORY_CAP;k++)history[k-1]=history[k];historySize--;}
     auto& h=history[historySize++];h.id=line.substring(0,a).toInt();h.sender=line.substring(a+1,b);h.kind=line.substring(b+1,c);h.body=line.substring(c+1);
   }f.close();
 }
 bool remember(uint32_t id,String sender,String kind,String text){
   text.replace("\n"," ");text.replace("\r"," ");text.replace("|","/");
-  if(historySize==8){for(int i=1;i<8;i++)history[i-1]=history[i];historySize--;}
+  if(historySize==HISTORY_CAP){for(int i=1;i<HISTORY_CAP;i++)history[i-1]=history[i];historySize--;}
   History& h=history[historySize++];h.id=id;h.sender=sender;h.kind=kind;h.body=text;
   if(!sdReady)return true; // RAM-only session: do not persist a cursor on flash.
   File f=SD.open(HISTORY,FILE_APPEND);
@@ -586,6 +588,36 @@ void listVoiceArchives(){
   }f.close();
 }
 
+bool archiveText(uint32_t id,const String& from,uint32_t created,
+                 const String& body,bool outgoing){
+  if(!sdReady || !id)return false;
+  String folder=voiceFolder(created,from);
+  folder.replace(VOICE_ROOT,TEXT_ROOT);
+  if(outgoing)folder.replace("/RECUS/","/ENVOYES/");
+  if(!createSDPath(folder))return false;
+  const String path=folder+"/"+voiceTime(created)+"_"+from+"_ID"+String(id)+".txt";
+  if(SD.exists(path.c_str()))return true;
+  const String temp=path+".part";
+  SD.remove(temp.c_str());
+  File f=SD.open(temp.c_str(),FILE_WRITE);
+  if(!f)return false;
+  String header="NEXUS TEXTE\nID: "+String(id)+"\nDe: "+from+
+    "\nDate: "+voiceTime(created)+" (Reunion)\nDirection: "+
+    String(outgoing?"envoye":"recu")+"\n\n";
+  const size_t expected=header.length()+body.length()+1;
+  bool ok=f.print(header)==header.length();
+  if(ok)ok=f.print(body)==body.length();
+  if(ok)ok=f.print("\n")==1;
+  f.flush();f.close();
+  if(!ok){SD.remove(temp.c_str());return false;}
+  File verify=SD.open(temp.c_str(),FILE_READ);
+  const bool valid=verify && verify.size()==expected;
+  if(verify)verify.close();
+  if(!valid){SD.remove(temp.c_str());return false;}
+  if(!SD.rename(temp.c_str(),path.c_str())){SD.remove(temp.c_str());return false;}
+  return true;
+}
+
 bool refreshUnread(){
   if(!configured() || WiFi.status()!=WL_CONNECTED)return false;
   WiFiClientSecure client;HTTPClient http;
@@ -622,10 +654,14 @@ void pollInbox(){
     String text=kind=="voice"?"Message vocal #"+String(id):m["text"].as<String>();
     // The message cursor cannot move past a voice before the WAV is on microSD.
     // Failure retries on the next poll instead of silently losing the archive.
-    if(kind=="voice" && sdReady) {
+    if(sdReady){
       const uint32_t created=m["created"]|0u;
-      if(!saveVoiceArchive(id,sender,created)){
+      if(kind=="voice" && !saveVoiceArchive(id,sender,created)){
         setStatus("Vocal non archive: verifier microSD / reseau");
+        break;
+      }
+      if(kind=="text" && !archiveText(id,sender,created,text,false)){
+        setStatus("Texte non archive: microSD indisponible");
         break;
       }
     }
@@ -676,8 +712,25 @@ void sendText(){
   String body;serializeJson(doc,body);WiFiClientSecure client;HTTPClient http;
   if(!openHttp(http,client,"/messages"))return;
   http.addHeader("Content-Type","application/json");
-  int code=http.POST((uint8_t*)body.c_str(),body.length());http.end();
-  if(code>=200&&code<300){editor="";prefs.putString("draft","");pendingTextId="";prefs.remove("txtid");setStatus("Texte envoye");changeView(View::HOME);}
+  int code=http.POST((uint8_t*)body.c_str(),body.length());
+  const String response=(code>=200&&code<300)?http.getString():"";
+  http.end();
+  if(code>=200&&code<300){
+    bool saved=true;
+    if(sdReady){
+      JsonDocument result;
+      if(deserializeJson(result,response))saved=false;
+      else{
+        const uint32_t id=result["id"]|0u;
+        const String from=recipient=="bob"?"alice":"bob";
+        saved=archiveText(id,from,(uint32_t)time(nullptr),editor,true);
+      }
+    }
+    editor="";prefs.putString("draft","");
+    pendingTextId="";prefs.remove("txtid");
+    setStatus(saved?"Texte envoye":"Envoye / archive texte microSD KO");
+    changeView(View::HOME);
+  }
   else{setStatus("Envoi refuse: "+String(code));paint();}
 }
 void writeLE16(File& f,uint16_t v){uint8_t a[2]={(uint8_t)v,(uint8_t)(v>>8)};f.write(a,2);}
