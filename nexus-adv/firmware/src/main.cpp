@@ -1,4 +1,4 @@
-/* NEXUS ADV v0.9.0 DEVELOPMENT SOURCE - Cardputer ADV ONLY.
+/* NEXUS ADV v1.0.0 RELEASE CANDIDATE SOURCE - Cardputer ADV ONLY.
  * Requires M5Cardputer >=1.1.1, microSD for audio; zero PSRAM allocation.
  * Wi-Fi credentials and device token are configured on the keyboard and saved in NVS.
  * Not hardware-certified: see VERIFICATION.md before flashing.
@@ -39,8 +39,13 @@ uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 uint32_t unreadCount=0, latestUnreadId=0;
 String latestUnreadPreview, latestUnreadSender;
 bool unreadSynced=false;
+bool notificationSound=true;
+uint32_t notifiedMessageId=0;
+int batteryVoltageSmooth=-1;
+int batteryLevelSmooth=-1;
+uint32_t batterySampleAt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
@@ -53,6 +58,12 @@ String morseQuizAnswer;
 String morseOutput;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
 uint8_t textPage=0, voiceSelection=0, voiceCount=0;
+constexpr uint8_t SEARCH_MAX=24;
+String searchPaths[SEARCH_MAX];
+uint8_t searchSize=0,searchSelection=0,searchPage=0;
+uint32_t searchMatches=0,searchScanned=0;
+bool searchLimited=false;
+String searchQuery,searchViewBody;
 struct VoiceArchive {uint32_t id=0; String sender,stamp,path;};
 VoiceArchive voiceArchives[VOICE_LIST_MAX];
 bool fullRepaint=true;
@@ -124,7 +135,7 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
 
 String sectionTitle(int section){
   static const char* names[]={"MESSAGES","VOCAL","MORSE","WI-FI","SYSTEME","AUTRES"};
-  return String(names[constrain(section,0,4)]);
+  return String(names[constrain(section,0,5)]);
 }
 int sectionOptions(int section,String items[]){
   if(section==0){items[0]="Boite de reception";items[1]="Nouveau message";items[2]="Messages envoyes";return 3;}
@@ -132,8 +143,8 @@ int sectionOptions(int section,String items[]){
     items[3]="Ecouter dernier vocal";items[4]="Effacer brouillon vocal";return 5;}
   if(section==2){items[0]="Ecrire en Morse";items[1]="Jouer le Morse (son)";items[2]="Decoder son (beta)";items[3]="Entrainement auditif";items[4]="Vitesse : "+String(morseWpm)+" MPM";return 5;}
   if(section==3){items[0]="Gerer les reseaux Wi-Fi";items[1]="Etat reseau";return 2;}
-  if(section==4){items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]="Detecter la microSD";return 3;}
-  items[0]="Espace sur microSD";items[1]="A propos de NEXUS";items[2]="Autres outils bientot";return 3;
+  if(section==4){items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]=String("Son notification : ")+(notificationSound?"ON":"OFF");items[3]="Detecter la microSD";return 4;}
+  items[0]="Rechercher dans textes";items[1]="Batterie : tension et %";items[2]="Espace sur microSD";items[3]="A propos de NEXUS";return 4;
 }
 void drawHome(){
   auto& l=M5Cardputer.Display;
@@ -350,6 +361,8 @@ void loadSettings(){
   serverUrl=prefs.getString("server",""); deviceToken=prefs.getString("token","");
   recipient=prefs.getString("peer","bob"); editor=prefs.getString("draft","");
   unreadCount=prefs.getUInt("unread",0);unreadSynced=false;
+  notificationSound=prefs.getBool("beep",true);
+  notifiedMessageId=prefs.getUInt("notified",0u);
   morseWpm=(uint8_t)constrain((int)prefs.getUInt("morsewpm",12u),5,30);
   pendingTextId=prefs.getString("txtid",""); pendingVoiceId=prefs.getString("vocid","");
   cursor=prefs.getUInt("cursor",0);lastVoiceId=prefs.getUInt("voice",0);
@@ -654,10 +667,22 @@ bool refreshUnread(){
   const String from=doc["latest"]["sender"]|"";
   const String preview=doc["latest"]["preview"]|"";
   const bool changed=unreadCount!=n || latestUnreadId!=id;
+  const bool notify=unreadSynced && id>notifiedMessageId && n>0 && notificationSound;
   if(unreadCount!=n && prefsReady)prefs.putUInt("unread",n);
   unreadCount=n;latestUnreadId=id;
   latestUnreadSender=from;latestUnreadPreview=clipped(preview,48);
   unreadSynced=true;
+  if(id>notifiedMessageId){
+    notifiedMessageId=id;
+    if(prefsReady)prefs.putUInt("notified",id);
+  }
+  if(notify){
+    M5Cardputer.Mic.end();M5Cardputer.Speaker.setVolume(48);
+    if(M5Cardputer.Speaker.begin()){
+      M5Cardputer.Speaker.tone(950,85);delay(105);
+      M5Cardputer.Speaker.stop();M5Cardputer.Speaker.end();
+    }
+  }
   if(changed && (view==View::HOME || view==View::SECTION))paint();
   return true;
 }
@@ -1029,11 +1054,15 @@ void openSectionSelection(){
     switch(sectionIndex){
       case 0:configIndex=0;changeView(View::CONFIG);break;
       case 1:changeView(View::DIAG);break;
-      case 2:initSd();setStatus(sdReady?"microSD reconnue":"microSD absente");paint();break;
+      case 2:notificationSound=!notificationSound;
+        if(prefsReady)prefs.putBool("beep",notificationSound);
+        setStatus(notificationSound?"Notification sonore activee":"Notification sonore coupee");paint();break;
+      case 3:initSd();setStatus(sdReady?"microSD reconnue":"microSD absente");paint();break;
     }
   }else{
-    if(sectionIndex==0||sectionIndex==1)changeView(View::STORAGE_INFO);
-    else{setStatus("Emplacement reserve aux futurs outils");paint();}
+    if(sectionIndex==0){searchQuery="";input="";changeView(View::SEARCH_EDIT);}
+    else if(sectionIndex==1)changeView(View::BATTERY_INFO);
+    else changeView(View::STORAGE_INFO);
   }
 }
 
