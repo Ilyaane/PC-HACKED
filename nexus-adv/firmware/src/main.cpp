@@ -40,13 +40,13 @@ uint32_t unreadCount=0, latestUnreadId=0;
 String latestUnreadPreview, latestUnreadSender;
 bool unreadSynced=false;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
 bool scanSaved[24]={}, scanOpen[24]={};
 uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
-constexpr uint8_t HOME_COUNT=5, CONFIG_COUNT=4, WIFI_SLOTS=5;
+constexpr uint8_t HOME_COUNT=6, CONFIG_COUNT=4, WIFI_SLOTS=5;
 uint8_t sectionIndex=0, morseMode=0;
 uint8_t morseWpm=12; char morseQuizLetter='A'; bool morseQuizAnswered=false;
 String morseQuizAnswer;
@@ -123,7 +123,7 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
 }
 
 String sectionTitle(int section){
-  static const char* names[]={"MESSAGES","VOCAL","MORSE","WI-FI","SYSTEME"};
+  static const char* names[]={"MESSAGES","VOCAL","MORSE","WI-FI","SYSTEME","AUTRES"};
   return String(names[constrain(section,0,4)]);
 }
 int sectionOptions(int section,String items[]){
@@ -132,11 +132,12 @@ int sectionOptions(int section,String items[]){
     items[3]="Ecouter dernier vocal";items[4]="Effacer brouillon vocal";return 5;}
   if(section==2){items[0]="Ecrire en Morse";items[1]="Jouer le Morse (son)";items[2]="Decoder son (beta)";items[3]="Entrainement auditif";items[4]="Vitesse : "+String(morseWpm)+" MPM";return 5;}
   if(section==3){items[0]="Gerer les reseaux Wi-Fi";items[1]="Etat reseau";return 2;}
-  items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]="Detecter la microSD";return 3;
+  if(section==4){items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]="Detecter la microSD";return 3;}
+  items[0]="Espace sur microSD";items[1]="A propos de NEXUS";items[2]="Autres outils bientot";return 3;
 }
 void drawHome(){
   auto& l=M5Cardputer.Display;
-  static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME"};
+  static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME","AUTRES"};
   if(fullRepaint)l.fillScreen(COL_BG);
   l.fillRect(0,0,240,26,COL_BG);
   l.fillRect(0,26,240,88,COL_BG);
@@ -169,13 +170,18 @@ void drawHome(){
     l.drawLine(91,67,120,54,COL_ACCENT);l.drawLine(120,54,149,67,COL_ACCENT);
     l.drawLine(103,75,120,67,COL_TEXT);l.drawLine(120,67,137,75,COL_TEXT);
     l.fillCircle(120,83,6,COL_ACCENT);
-  }else{
+  }else if(homeIndex==4){
     l.drawCircle(120,67,21,COL_TEXT);l.drawCircle(120,67,12,COL_ACCENT);
     l.fillCircle(120,67,5,COL_TEXT);
     for(int i=0;i<8;i++){
       float a=i*3.14159265f/4;
       l.drawLine(120+23*cosf(a),67+23*sinf(a),120+28*cosf(a),67+28*sinf(a),COL_TEXT);
     }
+  }
+  else {
+    l.fillRoundRect(92,51,55,37,6,COL_ACCENT);
+    l.setTextColor(COL_BG,COL_ACCENT);l.setTextSize(3);
+    l.setCursor(110,56);l.print("+");
   }
   l.setTextSize(1);l.setTextColor(COL_TEXT,COL_PANEL);
   l.setCursor(120-(strlen(names[homeIndex])*3),95);l.print(names[homeIndex]);
@@ -186,7 +192,7 @@ void drawHome(){
   if(unreadCount && latestUnreadSender.length())
     l.print(clipped("Nouveau "+latestUnreadSender+": "+latestUnreadPreview,31));
   else l.print("< ,     / >       Entree");
-  l.setCursor(197,117);l.print(String(homeIndex+1)+"/5");
+  l.setCursor(197,117);l.print(String(homeIndex+1)+"/"+String(HOME_COUNT));
 }
 
 void paint(){
@@ -279,12 +285,19 @@ void paint(){
    }
    break;}
  case View::SENT:drawLines("DERNIER ENVOI",clipped(lastSentInfo,33),"ENTREE: actualiser", "ESC: retour");break;
- case View::DIAG: drawLines("DIAGNOSTIC v0.7",
-    "Appareil: "+String(recipient=="bob"?"ALICE":"BOB")+" vers "+recipient,
+ case View::DIAG:drawLines("DIAGNOSTICS",
     "Wi-Fi: "+String(WiFi.status()==WL_CONNECTED?"OK ":"KO ")+clipped(wifiSsid,20),
-    "HTTPS: "+String(serverReady?"OK":"NON")+"   NVS: "+String(!prefsReady?"KO":storageFault?"ERREUR":"OK"),
-    "Config: "+String(serverUrl.length()?"URL ":"- ")+String(deviceToken.length()?"CODE":"-"),
-    "Entree: retester serveur");break;
+    "IP: "+WiFi.localIP().toString(),
+    "RAM libre: "+String(ESP.getFreeHeap())+" octets",
+    "Serveur: "+String(serverReady?"OK":"NON")+"   NVS: "+String(!prefsReady?"KO":storageFault?"ERR":"OK"),
+    "Role: "+String(recipient=="bob"?"ALICE":"BOB")+"  Non lus: "+String(unreadCount));break;
+ case View::STORAGE_INFO: {
+   String free="MicroSD absente",total="Vides";
+   if(sdReady){const uint64_t t=SD.totalBytes(),u=SD.usedBytes();
+     free="Libre: "+String((uint32_t)((t>u?t-u:0)/(1024*1024)))+" Mio";
+     total="Total: "+String((uint32_t)(t/(1024*1024)))+" Mio";}
+   drawLines("STOCKAGE ET VERSION","NEXUS v0.9 dev",free,total,
+     "Code conserve en NVS", "OPT : retour");break;}
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
  }
@@ -1002,12 +1015,15 @@ void openSectionSelection(){
   }else if(homeIndex==3){
     if(sectionIndex==0)wifiSetup();
     else changeView(View::DIAG);
-  }else{
+  }else if(homeIndex==4){
     switch(sectionIndex){
       case 0:configIndex=0;changeView(View::CONFIG);break;
       case 1:changeView(View::DIAG);break;
       case 2:initSd();setStatus(sdReady?"microSD reconnue":"microSD absente");paint();break;
     }
+  }else{
+    if(sectionIndex==0||sectionIndex==1)changeView(View::STORAGE_INFO);
+    else{setStatus("Emplacement reserve aux futurs outils");paint();}
   }
 }
 
@@ -1043,7 +1059,7 @@ void handleInput(){
     }else if(view==View::EDIT_URL || view==View::EDIT_TOKEN || view==View::EDIT_PEER){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
-    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN || view==View::VOICE_ARCHIVE)
+    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN || view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO)
       changeView(View::SECTION);
     else if(view==View::SECTION)changeView(View::HOME);
     else{changeView(View::SECTION);}
