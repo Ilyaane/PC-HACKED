@@ -115,7 +115,7 @@ void paint(){
    const String opts[]={"Messages recus","Ecrire un message","Messages envoyes","Enregistrer un vocal",
      "Envoyer le vocal","Ecouter un vocal","Reseaux Wi-Fi","Parametres NEXUS",
      "Diagnostics","Detecter microSD","Effacer le vocal"};
-   drawMenu("NEXUS   MESSAGERIE",opts,HOME_COUNT,homeIndex);break;}
+   drawMenu("NEXUS v0.7  MESSAGERIE",opts,HOME_COUNT,homeIndex);break;}
  case View::WIFI_CONFIRM: {
    const String opts[]={"Connecter : "+clipped(wifiSsid,23),"Choisir un autre Wi-Fi","Oublier ce reseau"};
    drawMenu("WI-FI MEMORISE",opts,3,confirmIndex);break;}
@@ -165,7 +165,7 @@ void paint(){
    }
    break;}
  case View::SENT:drawLines("DERNIER ENVOI",clipped(lastSentInfo,33),"ENTREE: actualiser", "ESC: retour");break;
- case View::DIAG: drawLines("DIAGNOSTIC",
+ case View::DIAG: drawLines("DIAGNOSTIC v0.7",
     "Appareil: "+String(recipient=="bob"?"ALICE":"BOB")+" vers "+recipient,
     "Wi-Fi: "+String(WiFi.status()==WL_CONNECTED?"OK ":"KO ")+clipped(wifiSsid,20),
     "HTTPS: "+String(serverReady?"OK":"NON")+"   NVS: "+String(!prefsReady?"KO":storageFault?"ERREUR":"OK"),
