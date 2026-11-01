@@ -1,4 +1,4 @@
-/* NEXUS ADV v0.6.0 SOURCE - Cardputer ADV ONLY.
+/* NEXUS ADV v0.7.0 SOURCE - Cardputer ADV ONLY.
  * Requires M5Cardputer >=1.1.1, microSD for audio; zero PSRAM allocation.
  * Wi-Fi credentials and device token are configured on the keyboard and saved in NVS.
  * Not hardware-certified: see VERIFICATION.md before flashing.
@@ -29,7 +29,7 @@ String wifiSsid, wifiPass, serverUrl, deviceToken, recipient="bob", editor, stat
 String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
-bool sdReady=false, netReady=false, serverReady=false;
+bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
 enum class View { HOME, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
@@ -49,7 +49,8 @@ void persistDraft(){ prefs.putString("draft",editor); }
 void setStatus(const String& msg){ statusLine=clipped(msg,60);Serial.println("NEXUS: "+statusLine); }
 void drawLines(const String& title,const String& a="",const String& b="",const String& c="",const String& d="",const String& e=""){
   auto& l=M5Cardputer.Display;
-  l.fillScreen(COL_BG);l.fillRect(0,0,240,21,COL_PANEL);
+  // Paint only the changed regions. Full-screen clears caused visible flashing.
+  l.fillRect(0,0,240,21,COL_PANEL);l.fillRect(0,21,240,114,COL_BG);
   l.setTextColor(COL_ACCENT,COL_PANEL);l.setTextSize(1);
   l.setCursor(7,7);l.print(clipped(title,27));
   l.setTextColor(WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN,COL_PANEL);
@@ -62,7 +63,7 @@ void drawLines(const String& title,const String& a="",const String& b="",const S
 }
 void menuFrame(const String& title){
   auto& l=M5Cardputer.Display;
-  l.fillScreen(COL_BG);
+  l.fillRect(0,0,240,23,COL_BG);
   l.fillRoundRect(2,2,236,20,5,COL_PANEL);
   l.fillRoundRect(7,6,11,11,3,COL_ACCENT);
   l.setTextColor(COL_BG,COL_ACCENT);
@@ -72,8 +73,9 @@ void menuFrame(const String& title){
   l.fillCircle(222,12,3,WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN);
 }
 void drawMenu(const String& title,const String opts[],int count,int selected,
-              const String& hint="Fn+; ^  Fn+. v   Entree OK"){
+              const String& hint="; Haut   . Bas   Entree OK"){
   auto& l=M5Cardputer.Display; menuFrame(title);
+  l.fillRect(0,23,240,91,COL_BG); // Clean only list region, never flash whole screen.
   const int start=(selected/5)*5;
   for(int r=0;r<5;r++){
     const int idx=start+r;
@@ -92,7 +94,7 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
   l.drawFastHLine(3,114,234,COL_PANEL);
   l.fillRect(0,115,240,20,COL_BG);
   l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,119);l.print(clipped(statusLine,30));
-  l.setCursor(202,119);l.print("^v OK");
+  l.setCursor(200,119);l.print("; . OK");
 }
 void paint(){
  switch(view){
@@ -110,7 +112,7 @@ void paint(){
    for(int i=0;i<scanCount;i++)
      opts[i]=String(scanSaved[i]?"[MEM] ":scanOpen[i]?"[LIB] ":"[WPA] ")+clipped(scanNames[i],28);
    drawMenu("RESEAUX  "+String(wifiIndex+1)+"/"+String(scanCount),opts,scanCount,wifiIndex,
-      "MEM=sauve  Fn+haut/bas Entree");break;}
+      "MEM=sauve  ;/. + Entree");break;}
  case View::WIFI_PASSWORD: {
    const String shown=input.length()>62?input.substring(input.length()-62):input;
    drawLines("MOT DE PASSE WI-FI","Reseau: "+clipped(wifiSsid,23),
@@ -150,9 +152,10 @@ void paint(){
    }
    break;}
  case View::SENT:drawLines("DERNIER ENVOI",clipped(lastSentInfo,33),"ENTREE: actualiser", "ESC: retour");break;
- case View::DIAG: drawLines("DIAGNOSTIC", "Wi-Fi: "+String(WiFi.status()==WL_CONNECTED?"connecte":"hors ligne"),
-    "Serveur: "+String(serverReady?"OK":"non verifie"),"IP: "+WiFi.localIP().toString(),
-    "Heap: "+String(ESP.getFreeHeap())+" B",String(sdReady?"microSD: OK":"microSD: absente"));break;
+ case View::DIAG: drawLines("DIAGNOSTIC", "Wi-Fi: "+String(WiFi.status()==WL_CONNECTED?"OK":"KO")+" code "+String((int)WiFi.status()),
+    "HTTPS: "+String(serverReady?"OK":"non verifie")+"  NVS: "+String(!prefsReady?"ERR":storageFault?"ERREUR":"OK"),
+    "Config: "+String(serverUrl.length()?"URL ":"- ")+String(deviceToken.length()?"TOKEN":"-"),
+    "IP: "+WiFi.localIP().toString(),"Entree: tester serveur");break;
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
  }
