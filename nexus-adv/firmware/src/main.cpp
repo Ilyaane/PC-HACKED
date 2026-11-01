@@ -1,4 +1,4 @@
-/* NEXUS ADV v0.5.0 SOURCE - Cardputer ADV ONLY.
+/* NEXUS ADV v0.6.0 SOURCE - Cardputer ADV ONLY.
  * Requires M5Cardputer >=1.1.1, microSD for audio; zero PSRAM allocation.
  * Wi-Fi credentials and device token are configured on the keyboard and saved in NVS.
  * Not hardware-certified: see VERIFICATION.md before flashing.
@@ -124,7 +124,7 @@ void paint(){
    const String shown=input.length()>68?input.substring(input.length()-68):input;
    drawLines("ADRESSE HTTPS",shown.substring(0,34),shown.length()>34?shown.substring(34):"",
       "Entree : enregistrer","Fn+ESC : annuler");break;}
- case View::EDIT_TOKEN:drawLines("JETON PERSONNEL","Minimum 12 caracteres",
+ case View::EDIT_TOKEN:drawLines("JETON PERSONNEL","Minimum 10 caracteres",
    masked(input.length()),"Entree : enregistrer","Fn+ESC : annuler");break;
  case View::EDIT_PEER:drawLines("DESTINATAIRE","alice ou bob",input,
    "Entree : enregistrer","Fn+ESC : annuler");break;
@@ -250,7 +250,7 @@ bool connectRememberedWiFi(){
   wifiSsid=previousSsid;wifiPass=previousPass;
   return false;
 }
-bool configured(){return serverUrl.startsWith("https://") && !serverUrl.endsWith("/") && deviceToken.length()>=12;}
+bool configured(){return serverUrl.startsWith("https://") && !serverUrl.endsWith("/") && deviceToken.length()>=10;}
 
 bool openHttp(HTTPClient& http, WiFiClientSecure& client,const String& path){
   if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi deconnecte");return false;}
@@ -261,6 +261,9 @@ bool openHttp(HTTPClient& http, WiFiClientSecure& client,const String& path){
   http.setTimeout(10000);http.setConnectTimeout(7500);
   if(!http.begin(client,serverUrl+path)){setStatus("Erreur ouverture HTTPS");return false;}
   http.addHeader("Authorization","Bearer "+deviceToken);
+  // The same code may be used by both Cardputers; the role is derived
+  // from the configured opposite recipient. This is NOT independent authentication.
+  http.addHeader("X-Nexus-User",recipient=="bob"?"alice":"bob");
   return true;
 }
 bool serverTest(){
@@ -270,7 +273,8 @@ bool serverTest(){
   int code=http.GET();String response=code==200?http.getString():"";
   http.end();
   JsonDocument doc;
-  serverReady=(code==200 && !deserializeJson(doc,response) && doc["ok"]==true);
+  const String expected=recipient=="bob"?"alice":"bob";
+  serverReady=(code==200 && !deserializeJson(doc,response) && doc["ok"]==true && doc["user"]==expected);
   setStatus(serverReady?"Serveur NEXUS OK":("Serveur inaccessible: "+String(code)));
   return serverReady;
 }
@@ -638,7 +642,7 @@ void handleInput(){
         }
       }
       if(view==View::EDIT_TOKEN){
-        if(input.length()<12){setStatus("Jeton trop court (12 min)");}
+        if(input.length()<10){setStatus("Jeton trop court (10 min)");}
         else{deviceToken=input;prefs.putString("token",deviceToken);
           serverReady=false;input="";setStatus("Jeton enregistre");
           changeView(View::CONFIG);return;}
