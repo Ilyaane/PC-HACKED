@@ -1,6 +1,6 @@
-# NEXUS Messagerie pour Cardputer ADV — v0.5 (interface menus)
+# NEXUS Messagerie pour Cardputer ADV — v0.6 (code partagé)
 
-Projet **M5Stack Cardputer ADV** (ESP32-S3, 8 Mo de flash). La version v0.5 améliore l'interface et le Wi-Fi. Le serveur Cloudflare Workers + D1 **NEXUS** a été déployé et testé avec les jetons existants à l'adresse `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Le nouveau firmware v0.5 doit être validé par la compilation GitHub Actions et par des essais réels sur Cardputer ADV avant d'être considéré comme testé matériellement.
+Projet **M5Stack Cardputer ADV** (ESP32-S3, 8 Mo de flash). La v0.6 conserve l'interface menus et le Wi-Fi mémorisé de v0.5 et ajoute l'option d'un code partagé entre deux appareils. Le serveur Cloudflare Workers + D1 **NEXUS** a été déployé et testé avec les jetons existants à l'adresse `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Le nouveau firmware v0.6 doit être validé par la compilation GitHub Actions et par des essais réels sur Cardputer ADV avant d'être considéré comme testé matériellement.
 
 ## Menus et navigation
 
@@ -32,13 +32,23 @@ Le firmware conserve les fonctions de la version précédente (texte, reçu/envo
 
 **Important à la mise à jour :** flasher uniquement `firmware.bin` à l'adresse **0x10000** et **ne pas effacer la mémoire complète** permet normalement de conserver les données NVS (Wi-Fi et configuration). L'image complète `NEXUS_ADV_full_flash_0x0.bin` écrite à `0x0` peut effacer les réglages NVS; refaire alors la configuration.
 
-## Deux appareils et jetons
+## Deux Cardputer, un même code
 
-Les deux Cardputer utilisent la même URL serveur. Le premier utilise le jeton Alice avec destinataire `bob`, et le deuxième le jeton Bob avec destinataire `alice`. Ces jetons sont saisis manuellement via **Paramètres NEXUS**.
+Dans le mode partagé, **le même code de connexion est saisi sur les deux appareils**, dès 10 caractères. Il ne doit **pas** être publié dans le code source. Le serveur identifie ensuite les demandes grâce à un champ `X-Nexus-User` dérivé du destinataire configuré sur chaque Cardputer.
 
-Le serveur et le firmware acceptent désormais des jetons **d'au moins 12 caractères** et les anciens jetons longs restent valides. Pour réellement passer aux nouveaux jetons courts, il faut mettre à jour **les deux secrets GitHub Actions** `NEXUS_ALICE_TOKEN` et `NEXUS_BOB_TOKEN`, redéployer le serveur et saisir les mêmes valeurs sur les appareils. Aucun jeton privé n'est inscrit dans ce dépôt.
+- Cardputer 1 : code partagé, **correspondant** `bob` ; l'application se présente comme **alice**.
+- Cardputer 2 : même code partagé, **correspondant** `alice` ; l'application se présente comme **bob**.
+- Les deux appareils ont la même adresse HTTPS `https://nexus-messagerie.ilyaane-patel1.workers.dev`.
 
-Privilégier 12 caractères **difficiles à deviner**, plutôt qu'un mot courant ou un code public. Les jetons sont des identifiants, **pas** un chiffrement de bout en bout. Les messages restent lisibles par l'administrateur du serveur et les mots de passe Wi-Fi stockés en NVS ne sont pas protégés contre un accès physique au matériel.
+### Activation du mode partagé dans GitHub
+
+Le seul nouveau secret GitHub nécessaire est **`NEXUS_SHARED_TOKEN`**. Entrer la valeur du code choisi dans GitHub > dépôt PC-HACKED > Settings > Secrets and variables > Actions. Le code ne doit pas être ajouté à un fichier suivi par Git. Ensuite relancer le workflow **NEXUS Server - Cloudflare deploy and smoke tests**.
+
+**Tant que `NEXUS_SHARED_TOKEN` n'est pas renseigné**, le serveur fonctionne avec ses anciens jetons distincts `NEXUS_ALICE_TOKEN` et `NEXUS_BOB_TOKEN` pour préserver les installations existantes. **Quand le mode partagé est activé**, les anciens jetons ne donnent plus accès au serveur.
+
+### Limite importante de sécurité
+
+Un code facile à deviner et connu des deux appareils est **moins sûr** que deux jetons aléatoires. Chaque personne connaissant le code peut demander à agir comme Alice **ou** comme Bob, car le rôle est déclaré par l'appareil et non prouvé cryptographiquement. **Ne pas utiliser pour des échanges confidentiels ou sensibles**, et privilégier un code aléatoire plus long si les appareils communiquent sur Internet. Les messages ne sont pas chiffrés de bout en bout. Les mots de passe Wi-Fi restent stockés en NVS et peuvent être lus en cas d'accès physique.
 
 ## Compilation et vérification
 
