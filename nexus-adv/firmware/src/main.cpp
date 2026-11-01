@@ -982,14 +982,14 @@ void handleInput(){
   }
   if(view==View::MORSE_TRAIN){
     if(morseQuizAnswered){
-      if(k.enter){morseQuizLetter=(char)(\'A\'+(esp_random()%26));
-        morseQuizAnswered=false;morseQuizAnswer=\"\";
+      if(k.enter){morseQuizLetter=(char)('A'+(esp_random()%26));
+        morseQuizAnswered=false;morseQuizAnswer="";
         playMorseAudio(NexusMorse::encode(String(morseQuizLetter)));paint();}
     }else{
       if(k.del&&morseQuizAnswer.length())morseQuizAnswer.remove(morseQuizAnswer.length()-1);
       for(char ch:k.word)if(isalpha((unsigned char)ch)&&morseQuizAnswer.length()<1)morseQuizAnswer+=String((char)toupper((unsigned char)ch));
       if(k.enter){morseQuizAnswered=true;
-        setStatus(morseQuizAnswer==String(morseQuizLetter)?\"Bonne reponse !\":\"Essaye encore / nouvelle lettre\");}
+        setStatus(morseQuizAnswer==String(morseQuizLetter)?"Bonne reponse !":"Essaye encore / nouvelle lettre");}
       paint();
     }
     return;
