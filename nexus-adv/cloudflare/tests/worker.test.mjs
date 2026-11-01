@@ -156,7 +156,7 @@ test('no secrets returned and unprivileged users cannot read any voice data',asy
  }
 });
 test('one 10-character shared code works for Alice and Bob with explicit roles',async()=>{
- const env=makeEnv(),code='Nexus_974!';
+ const env=makeEnv(),code='DemoX_974!';
  assert.equal(code.length,10);
  env.SHARED_TOKEN=code;
  const role=(user,other={})=>({'X-Nexus-User':user,...other});
@@ -167,7 +167,7 @@ test('one 10-character shared code works for Alice and Bob with explicit roles',
  }
  assert.equal((await worker.fetch(req('GET','/session',code),env)).status,401);
  assert.equal((await worker.fetch(req('GET','/session',code,undefined,role('other')),env)).status,401);
- assert.equal((await worker.fetch(req('GET','/session','Nexus_974',undefined,role('alice')),env)).status,401);
+ assert.equal((await worker.fetch(req('GET','/session','DemoX_974',undefined,role('alice')),env)).status,401);
  assert.equal((await worker.fetch(req('GET','/session',alice,undefined,role('alice')),env)).status,401);
  const outgoing=await worker.fetch(req('POST','/messages',code,
    JSON.stringify({to:'bob',text:'Salut Bob',client_id:'shared_alice_msg_1'}),
@@ -188,7 +188,7 @@ test('one 10-character shared code works for Alice and Bob with explicit roles',
  assert.equal(wrong.status,400);
 });
 test('shared-code voice remains isolated by explicit role and requires the code',async()=>{
- const env=makeEnv(),code='Nexus_974!';env.SHARED_TOKEN=code;
+ const env=makeEnv(),code='DemoX_974!';env.SHARED_TOKEN=code;
  const blob=wav(1);
  const uploaded=await worker.fetch(req('POST','/voice/bob',code,blob,
    {'Content-Type':'audio/wav','X-Client-Id':'shared_voice_msg_12','X-Nexus-User':'alice'}),env);
@@ -199,6 +199,6 @@ test('shared-code voice remains isolated by explicit role and requires the code'
  assert.deepEqual(Buffer.from(await bobRead.arrayBuffer()),blob);
  const missingHeader=await worker.fetch(req('GET','/voice/'+id,code),env);
  assert.equal(missingHeader.status,401);
- const wrongCode=await worker.fetch(req('GET','/voice/'+id,'Nexus_974',undefined,{'X-Nexus-User':'bob'}),env);
+ const wrongCode=await worker.fetch(req('GET','/voice/'+id,'DemoX_974',undefined,{'X-Nexus-User':'bob'}),env);
  assert.equal(wrongCode.status,401);
 });
