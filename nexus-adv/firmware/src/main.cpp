@@ -302,6 +302,42 @@ void paint(){
     "RAM libre: "+String(ESP.getFreeHeap())+" octets",
     "Serveur: "+String(serverReady?"OK":"NON")+"   NVS: "+String(!prefsReady?"KO":storageFault?"ERR":"OK"),
     "Role: "+String(recipient=="bob"?"ALICE":"BOB")+"  Non lus: "+String(unreadCount));break;
+ case View::BATTERY_INFO: {
+   const String v=batteryVoltageSmooth>0?String(batteryVoltageSmooth)+" mV":"mesure indisponible";
+   const String percent=batteryLevelSmooth>=0?String(batteryLevelSmooth)+" %":"indisponible";
+   drawLines("BATTERIE / ESTIMATION",
+     "Niveau estime: "+percent,"Tension mesuree: "+v,
+     "Pas de jauge precise a bord",
+     "Tester debranche si possible",
+     "Entree: actualiser");break;}
+ case View::SEARCH_EDIT: {
+   const String value=input.length()>68?input.substring(input.length()-68):input;
+   drawLines("RECHERCHE ARCHIVES TXT","Recherche (min 2 signes)",
+     value.substring(0,34),value.length()>34?value.substring(34):"",
+     "Entree: chercher", "OPT: retour");break;}
+ case View::SEARCH_RESULTS: {
+   if(!searchSize){
+     drawLines("RESULTATS ARCHIVES","Aucun message trouve",
+       "Fichiers scannes: "+String(searchScanned),
+       searchLimited?"Recherche partielle":"Recherche terminee",
+       "OPT: retour");break;
+   }
+   String opts[SEARCH_MAX];
+   for(int i=0;i<searchSize;i++){
+     String p=searchPaths[i];int slash=p.lastIndexOf('/');
+     opts[i]=slash>=0?p.substring(slash+1):p;
+   }
+   drawMenu("RESULTATS "+String(searchMatches)+" ("+String(searchSize)+")",
+     opts,searchSize,searchSelection);break;}
+ case View::SEARCH_VIEW: {
+   const size_t count=max((size_t)1,(searchViewBody.length()+92)/93);
+   if(searchPage>=count)searchPage=0;
+   String p=searchViewBody.substring(searchPage*93,(searchPage+1)*93);
+   drawLines("MESSAGE p"+String(searchPage+1)+"/"+String(count),
+     p.substring(0,31),p.length()>31?p.substring(31,62):"",
+     p.length()>62?p.substring(62,93):"",
+     "Virgule/slash: page",
+     "OPT: resultats");break;}
  case View::STORAGE_INFO: {
    String free="MicroSD absente",total="Vides";
    if(sdReady){const uint64_t t=SD.totalBytes(),u=SD.usedBytes();
@@ -1018,6 +1054,83 @@ void decodeMorseMicrophone(){
   setStatus("Decodage beta: tone 880Hz, bruit faible");
   changeView(View::MORSE_RESULT);
 }
+
+void measureBattery(){
+  // Cardputer ADV: voltage and voltage-derived percentage, not precision state-of-charge.
+  int values[7],n=0;
+  for(int k=0;k<7;k++){
+    int sample=M5Cardputer.Power.getBatteryVoltage();
+    if(sample>=2800 && sample<=4500)values[n++]=sample;
+    delay(12);
+  }
+  if(n){
+    for(int i=1;i<n;i++){int t=values[i],j=i-1;while(j>=0&&values[j]>t){values[j+1]=values[j];j--;}values[j+1]=t;}
+    const int median=values[n/2];
+    batteryVoltageSmooth=batteryVoltageSmooth<0?median:(batteryVoltageSmooth*3+median)/4;
+  }else batteryVoltageSmooth=-1;
+  const int percent=M5Cardputer.Power.getBatteryLevel();
+  if(percent>=0&&percent<=100)
+    batteryLevelSmooth=batteryLevelSmooth<0?percent:(batteryLevelSmooth*3+percent)/4;
+  else batteryLevelSmooth=-1;
+  batterySampleAt=millis();
+}
+bool textFileMatch(const String& path,const String& keyword){
+  File f=SD.open(path.c_str(),FILE_READ);
+  if(!f)return false;
+  const size_t size=f.size();
+  if(size==0||size>4096){f.close();return false;}
+  String data=f.readString();f.close();data.toLowerCase();
+  return data.indexOf(keyword)>=0;
+}
+void scanTextFolder(const String& directory,const String& keyword,int depth){
+  if(depth>9||searchScanned>=12000||!sdReady)return;
+  File folder=SD.open(directory.c_str(),FILE_READ);
+  if(!folder || !folder.isDirectory()){if(folder)folder.close();return;}
+  File item=folder.openNextFile();
+  while(item && searchScanned<12000){
+    String path=String(item.path());
+    const bool folderItem=item.isDirectory();
+    item.close();
+    if(path.startsWith(String(TEXT_ROOT)+"/")){
+      if(folderItem)scanTextFolder(path,keyword,depth+1);
+      else if(path.endsWith(".txt")){
+        searchScanned++;
+        if(textFileMatch(path,keyword)){
+          searchMatches++;
+          if(searchSize==SEARCH_MAX){
+            for(int i=1;i<SEARCH_MAX;i++)searchPaths[i-1]=searchPaths[i];
+            searchSize--;
+          }
+          searchPaths[searchSize++]=path;
+        }
+      }
+    }
+    item=folder.openNextFile();
+  }
+  if(item)item.close();
+  folder.close();
+  if(searchScanned>=12000)searchLimited=true;
+}
+void searchTextArchive(){
+  searchSize=searchSelection=searchPage=0;
+  searchMatches=searchScanned=0;searchLimited=false;
+  searchQuery=input;searchQuery.trim();
+  if(!sdReady){setStatus("Inserer microSD pour chercher");changeView(View::SECTION);return;}
+  if(searchQuery.length()<2){setStatus("Mot de recherche trop court");paint();return;}
+  String keyword=searchQuery;keyword.toLowerCase();
+  scanTextFolder(TEXT_ROOT,keyword,0);
+  setStatus(String(searchMatches)+" resultat(s), "+String(searchScanned)+" fichiers"+(searchLimited?" (limite)":""));
+  changeView(View::SEARCH_RESULTS);
+}
+void openArchiveText(){
+  if(searchSelection>=searchSize)return;
+  File f=SD.open(searchPaths[searchSelection].c_str(),FILE_READ);
+  if(!f){setStatus("Archive introuvable");paint();return;}
+  if(f.size()>4096){f.close();setStatus("Archive trop grande");paint();return;}
+  searchViewBody=f.readString();f.close();
+  searchPage=0;changeView(View::SEARCH_VIEW);
+}
+
 void openSectionSelection(){
   if(homeIndex==0){
     switch(sectionIndex){
