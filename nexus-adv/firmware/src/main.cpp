@@ -95,20 +95,38 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
 }
 void paint(){
  switch(view){
- case View::HOME: drawLines("NEXUS / CARDPUTER ADV", "T: texte  I: recu  O: envoye", "V: vocal  U: envoyer vocal", "P: lire vocal  R: microSD", "W: WiFi  C: reglages", "D: diag  Z: jeter vocal");break;
- case View::WIFI_CONFIRM: drawLines("WI-FI MEMORISE",clipped(wifiSsid,32),"ENTREE: OUI, connecter","N: NON, autre reseau","F: oublier le Wi-Fi", "ESC: retour");break;
+ case View::HOME: {
+   const String opts[]={"Messages recus","Ecrire un message","Messages envoyes","Enregistrer un vocal",
+     "Envoyer le vocal","Ecouter un vocal","Reseaux Wi-Fi","Parametres NEXUS",
+     "Diagnostics","Detecter microSD","Effacer le vocal"};
+   drawMenu("NEXUS   MESSAGERIE",opts,HOME_COUNT,homeIndex);break;}
+ case View::WIFI_CONFIRM: {
+   const String opts[]={"Connecter : "+clipped(wifiSsid,23),"Choisir un autre Wi-Fi","Oublier ce reseau"};
+   drawMenu("WI-FI MEMORISE",opts,3,confirmIndex);break;}
  case View::WIFI_LIST: {
-   String rows[5];for(int i=0;i<5;i++){
-     int pos=scanPage*5+i;
-     if(pos<scanCount)rows[i]=String(i+1)+" "+clipped(scanNames[pos],28);
-   }
-   drawLines("WI-FI "+String(scanPage+1)+"/"+String(max(1,(int)(scanCount+4)/5)),rows[0],rows[1],rows[2],rows[3],rows[4]);
-   break;}
- case View::WIFI_PASSWORD: drawLines("MOT DE PASSE WI-FI",clipped(wifiSsid,32),masked(input.length()),"ENTREE: tester/sauver", "ESC: annuler");break;
- case View::CONFIG: drawLines("REGLAGES DU SERVEUR", "1: adresse HTTPS", "2: jeton de cet appareil", "3: correspondant (alice/bob)", "W: configuration Wi-Fi", "ESC: retour");break;
- case View::EDIT_URL: drawLines("SERVEUR HTTPS", "Adresse du Worker:",clipped(input,34),"ENTREE: enregistrer","ESC: annuler");break;
- case View::EDIT_TOKEN: drawLines("JETON PERSONNEL", "Secret (minimum 12 chars)",masked(input.length()),"ENTREE: enregistrer","ESC: annuler");break;
- case View::EDIT_PEER: drawLines("DESTINATAIRE", "Choisir alice ou bob",input,"ENTREE: enregistrer","ESC: annuler");break;
+   if(scanCount==0){drawLines("RESEAUX WI-FI","Aucun reseau trouve","Fn+ESC : retour");break;}
+   String opts[24];
+   for(int i=0;i<scanCount;i++)
+     opts[i]=String(scanSaved[i]?"[MEM] ":scanOpen[i]?"[LIB] ":"[WPA] ")+clipped(scanNames[i],28);
+   drawMenu("RESEAUX  "+String(wifiIndex+1)+"/"+String(scanCount),opts,scanCount,wifiIndex,
+      "MEM=sauve  Fn+haut/bas Entree");break;}
+ case View::WIFI_PASSWORD: {
+   const String shown=input.length()>62?input.substring(input.length()-62):input;
+   drawLines("MOT DE PASSE WI-FI","Reseau: "+clipped(wifiSsid,23),
+       shown.substring(0,31),shown.length()>31?shown.substring(31):"",
+       "Entree : connecter et sauver","Fn+ESC : retour");break;}
+ case View::CONFIG: {
+   const String opts[]={"Adresse HTTPS du serveur","Jeton de cet appareil",
+     "Correspondant : "+recipient,"Reseaux Wi-Fi"};
+   drawMenu("REGLAGES NEXUS",opts,CONFIG_COUNT,configIndex);break;}
+ case View::EDIT_URL: {
+   const String shown=input.length()>68?input.substring(input.length()-68):input;
+   drawLines("ADRESSE HTTPS",shown.substring(0,34),shown.length()>34?shown.substring(34):"",
+      "Entree : enregistrer","Fn+ESC : annuler");break;}
+ case View::EDIT_TOKEN:drawLines("JETON PERSONNEL","Minimum 12 caracteres",
+   masked(input.length()),"Entree : enregistrer","Fn+ESC : annuler");break;
+ case View::EDIT_PEER:drawLines("DESTINATAIRE","alice ou bob",input,
+   "Entree : enregistrer","Fn+ESC : annuler");break;
  case View::COMPOSE: {
    String tail=editor.length()>66?editor.substring(editor.length()-66):editor;
    drawLines("ECRIRE UN MESSAGE", "Vers: "+recipient,clipped(tail,33),tail.length()>33?clipped(tail.substring(33),33):"", "ENTREE: envoyer", "ESC: menu principal");break;}
