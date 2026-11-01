@@ -9,13 +9,18 @@ const wrangler = (...args) => execFileSync('npx', ['--yes', 'wrangler@4.102.0', 
   env: { ...process.env, WRANGLER_SEND_METRICS: 'false' },
 });
 
-for (const name of ['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID','NEXUS_ALICE_TOKEN','NEXUS_BOB_TOKEN']) {
+for (const name of ['CLOUDFLARE_API_TOKEN','CLOUDFLARE_ACCOUNT_ID']) {
   if (!process.env[name]) throw new Error(`Missing GitHub Actions secret: ${name}. No deployment attempted.`);
 }
-const alice = process.env.NEXUS_ALICE_TOKEN;
-const bob = process.env.NEXUS_BOB_TOKEN;
-if (alice === bob || alice.length < 12 || bob.length < 12 || alice.length > 160 || bob.length > 160) {
-  throw new Error('Device tokens must be distinct, with 12-160 characters. No deployment attempted.');
+const shared = process.env.NEXUS_SHARED_TOKEN || '';
+const alice = process.env.NEXUS_ALICE_TOKEN || '';
+const bob = process.env.NEXUS_BOB_TOKEN || '';
+if (shared) {
+  if (shared.length < 10 || shared.length > 160)
+    throw new Error('Shared device code must have 10-160 characters. No deployment attempted.');
+} else if (!alice || !bob || alice === bob ||
+           alice.length < 12 || bob.length < 12 || alice.length > 160 || bob.length > 160) {
+  throw new Error('Until shared mode is configured, distinct legacy device tokens of 12-160 characters are required.');
 }
 
 const root = process.cwd();
@@ -34,7 +39,7 @@ fs.writeFileSync(path.join(root, 'wrangler.toml'), `name = "${NAME}"\nmain = "sr
 console.log('Initializing message schema (idempotent).');
 wrangler('d1','execute',NAME,'--remote','--file=./schema.sql','--yes');
 const secretFile = path.join(os.tmpdir(), `nexus-secrets-${process.pid}.json`);
-fs.writeFileSync(secretFile, JSON.stringify({ ALICE_TOKEN: alice, BOB_TOKEN: bob }), {mode: 0o600});
+fs.writeFileSync(secretFile, JSON.stringify(shared ? { SHARED_TOKEN: shared } : { ALICE_TOKEN: alice, BOB_TOKEN: bob }), {mode: 0o600});
 let output = '';
 try {
   console.log('Deploying Worker and protected device secrets.');
@@ -63,8 +68,33 @@ if (!ready) throw new Error('Deployed Worker failed /health after retries: '+las
 console.log('NEXUS /health smoke test passed.');
 const unauth = await fetch(url + '/session');
 if (unauth.status !== 401) throw new Error('Session endpoint does not reject unauthenticated requests.');
-for (const [token, expected] of [[alice,'alice'],[bob,'bob']]) {
-  const res = await fetch(url + '/session', {headers: {Authorization: `Bearer ${token}`}});
-  if (!res.ok || (await res.json()).user !== expected) throw new Error('Authenticated session smoke test failed');
+if(shared) {
+  for (const role of ['alice','bob']) {
+    const headers={Authorization:`Bearer ${shared}`,'X-Nexus-User':role};
+    const res=await fetch(url+'/session',{headers});
+    if(!res.ok || (await res.json()).user!==role)
+      throw new Error('Shared-code authentication failed for '+role);
+  }
+  const missingRole=await fetch(url+'/session',{headers:{Authorization:`Bearer ${shared}`}});
+  if(missingRole.status!==401)throw new Error('Shared code accepted without a role');
+  const invalidRole=await fetch(url+'/session',{headers:{Authorization:`Bearer ${shared}`,'X-Nexus-User':'mallory'}});
+  if(invalidRole.status!==401)throw new Error('Unexpected device role accepted');
+  const legacy=await fetch(url+'/session',{headers:{Authorization:`Bearer ${alice}`,'X-Nexus-User':'alice'}});
+  if(legacy.status!==401)throw new Error('Legacy token was not disabled in shared mode');
+  // Actual text end-to-end via Cloudflare D1.
+  const clientId='e2e_'+Math.random().toString(36).slice(2,13)+'_'+Date.now();
+  const sent=await fetch(url+'/messages',{method:'POST',
+    headers:{Authorization:`Bearer ${shared}`,'X-Nexus-User':'alice','Content-Type':'application/json'},
+    body:JSON.stringify({to:'bob',text:'NEXUS connectivity check',client_id:clientId})});
+  if(!sent.ok)throw new Error('Shared Alice to Bob message not sent: '+sent.status);
+  const inbox=await fetch(url+'/messages?after=0',{headers:{Authorization:`Bearer ${shared}`,'X-Nexus-User':'bob'}});
+  if(!inbox.ok || !(await inbox.json()).messages.some(m=>m.sender==='alice' && m.text==='NEXUS connectivity check'))
+    throw new Error('Shared Alice to Bob message not received');
+} else {
+  for (const [token, expected] of [[alice,'alice'],[bob,'bob']]) {
+    const res = await fetch(url + '/session', {headers: {Authorization: `Bearer ${token}`}});
+    if (!res.ok || (await res.json()).user !== expected)
+      throw new Error('Legacy authenticated session smoke test failed');
+  }
 }
 console.log(`NEXUS DEPLOYMENT SUCCESS: ${url}`);
