@@ -31,7 +31,7 @@ async function identify(request, env) {
   const a=request.headers.get('Authorization')||'';
   if(!a.startsWith('Bearer ')) return null;
   const tok=a.slice(7);
-  if(tok.length<24 || tok.length>160) return null;
+  if(tok.length<12 || tok.length>160) return null;
   if(await sameToken(tok,env.ALICE_TOKEN)) return 'alice';
   if(await sameToken(tok,env.BOB_TOKEN)) return 'bob';
   return null;
