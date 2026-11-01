@@ -157,10 +157,35 @@ void paint(){
  }
 }
 void changeView(View v){view=v;paint();}
+String wifiKey(int slot,char type){return String("w")+type+String(slot);}
+int wifiSlot(const String& ssid){
+  if(ssid.isEmpty())return -1;
+  for(int i=0;i<WIFI_SLOTS;i++)
+    if(prefs.getString(wifiKey(i,'s').c_str(),"")==ssid)return i;
+  return -1;
+}
+void rememberNetwork(const String& ssid,const String& pass){
+  if(ssid.isEmpty())return;
+  int slot=wifiSlot(ssid);
+  if(slot<0){
+    slot=-1;
+    for(int i=0;i<WIFI_SLOTS;i++)
+      if(prefs.getString(wifiKey(i,'s').c_str(),"").isEmpty()){slot=i;break;}
+    if(slot<0)slot=0; // bounded replacement when all five slots are used
+  }
+  prefs.putString(wifiKey(slot,'s').c_str(),ssid);
+  prefs.putString(wifiKey(slot,'p').c_str(),pass);
+}
+void forgetNetwork(const String& ssid){
+  const int slot=wifiSlot(ssid);
+  if(slot>=0){prefs.remove(wifiKey(slot,'s').c_str());prefs.remove(wifiKey(slot,'p').c_str());}
+}
+
 String nonce(){char buf[25]; snprintf(buf,sizeof(buf),"%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());return String(buf);}
 void loadSettings(){
   prefs.begin("nexusadv",false);
   wifiSsid=prefs.getString("ssid",""); wifiPass=prefs.getString("pwd","");
+  if(!wifiSsid.isEmpty() && wifiSlot(wifiSsid)<0)rememberNetwork(wifiSsid,wifiPass); // migrate old NVS
   serverUrl=prefs.getString("server",""); deviceToken=prefs.getString("token","");
   recipient=prefs.getString("peer","bob"); editor=prefs.getString("draft","");
   pendingTextId=prefs.getString("txtid",""); pendingVoiceId=prefs.getString("vocid","");
@@ -235,24 +260,37 @@ bool serverTest(){
 }
 void scanWifi(){
   changeView(View::WIFI_LIST);setStatus("Recherche Wi-Fi...");paint();
-  int n=WiFi.scanNetworks(false,true);scanCount=0;scanPage=0;
+  int n=WiFi.scanNetworks(false,true);scanCount=0;scanPage=0;wifiIndex=0;
   for(int i=0;i<n && scanCount<24;i++){
     String name=WiFi.SSID(i);if(name.isEmpty())continue;
     bool duplicate=false;for(int j=0;j<scanCount;j++)if(scanNames[j]==name)duplicate=true;
-    if(!duplicate)scanNames[scanCount++]=name;
+    if(!duplicate){scanNames[scanCount]=name;scanSaved[scanCount]=wifiSlot(name)>=0;
+      scanOpen[scanCount]=(WiFi.encryptionType(i)==WIFI_AUTH_OPEN);scanCount++;}
   }
-  WiFi.scanDelete();setStatus(scanCount?"1-5: choix  N: suite  B: avant":"Aucun reseau trouve");paint();
+  WiFi.scanDelete();setStatus(scanCount?"Fleches : selection / Entree : OK":"Aucun reseau trouve");paint();
 }
 void wifiSetup(){
-  if(wifiSsid.isEmpty())scanWifi();else changeView(View::WIFI_CONFIRM);
+  if(wifiSsid.isEmpty())scanWifi();else{confirmIndex=0;changeView(View::WIFI_CONFIRM);}
 }
+void storeWiFiAfterTest(const String& newPass);
+void chooseWiFi(int selected){
+  if(selected<0 || selected>=scanCount)return;
+  wifiSsid=scanNames[selected];const int saved=wifiSlot(wifiSsid);
+  if(saved>=0){
+    const String pass=prefs.getString(wifiKey(saved,'p').c_str(),"");
+    storeWiFiAfterTest(pass);return;
+  }
+  if(scanOpen[selected]){storeWiFiAfterTest("");return;}
+  input="";changeView(View::WIFI_PASSWORD);
+}
+void storeWiFiAfterTest(const String& newPass); // forward declaration
 void storeWiFiAfterTest(const String& newPass){
   String ssid=wifiSsid,pass=newPass;
   const String oldSsid=prefs.getString("ssid","");
   const String oldPass=prefs.getString("pwd","");
   wifiPass=pass;
   if(connectSaved()){
-    prefs.putString("ssid",ssid);prefs.putString("pwd",pass);
+    prefs.putString("ssid",ssid);prefs.putString("pwd",pass);rememberNetwork(ssid,pass);
     const bool hasServer=serverTest();
     setStatus(hasServer ? "Wi-Fi et serveur OK" : "Wi-Fi OK / serveur indisponible");
     changeView(View::HOME);
