@@ -155,3 +155,50 @@ test('no secrets returned and unprivileged users cannot read any voice data',asy
   assert.equal((await r.text()).includes(alice),false);
  }
 });
+test('one 10-character shared code works for Alice and Bob with explicit roles',async()=>{
+ const env=makeEnv(),code='Nexus_974!';
+ assert.equal(code.length,10);
+ env.SHARED_TOKEN=code;
+ const role=(user,other={})=>({'X-Nexus-User':user,...other});
+ for(const user of ['alice','bob']){
+   const r=await worker.fetch(req('GET','/session',code,undefined,role(user)),env);
+   assert.equal(r.status,200);
+   assert.equal((await r.json()).user,user);
+ }
+ assert.equal((await worker.fetch(req('GET','/session',code),env)).status,401);
+ assert.equal((await worker.fetch(req('GET','/session',code,undefined,role('other')),env)).status,401);
+ assert.equal((await worker.fetch(req('GET','/session','Nexus_974',undefined,role('alice')),env)).status,401);
+ assert.equal((await worker.fetch(req('GET','/session',alice,undefined,role('alice')),env)).status,401);
+ const outgoing=await worker.fetch(req('POST','/messages',code,
+   JSON.stringify({to:'bob',text:'Salut Bob',client_id:'shared_alice_msg_1'}),
+   role('alice',{'Content-Type':'application/json'})),env);
+ assert.equal(outgoing.status,200);
+ const received=await worker.fetch(req('GET','/messages',code,undefined,role('bob')),env);
+ assert.equal(received.status,200);
+ assert.equal((await received.json()).messages[0].text,'Salut Bob');
+ const backward=await worker.fetch(req('POST','/messages',code,
+   JSON.stringify({to:'alice',text:'Salut Alice',client_id:'shared_bob_msg_1'}),
+   role('bob',{'Content-Type':'application/json'})),env);
+ assert.equal(backward.status,200);
+ const got=await worker.fetch(req('GET','/messages',code,undefined,role('alice')),env);
+ assert.equal((await got.json()).messages[0].text,'Salut Alice');
+ const wrong=await worker.fetch(req('POST','/messages',code,
+   JSON.stringify({to:'bob',text:'Erreur',client_id:'shared_same_user_1'}),
+   role('bob',{'Content-Type':'application/json'})),env);
+ assert.equal(wrong.status,400);
+});
+test('shared-code voice remains isolated by explicit role and requires the code',async()=>{
+ const env=makeEnv(),code='Nexus_974!';env.SHARED_TOKEN=code;
+ const blob=wav(1);
+ const uploaded=await worker.fetch(req('POST','/voice/bob',code,blob,
+   {'Content-Type':'audio/wav','X-Client-Id':'shared_voice_msg_12','X-Nexus-User':'alice'}),env);
+ assert.equal(uploaded.status,200);
+ const id=(await uploaded.json()).id;
+ const bobRead=await worker.fetch(req('GET','/voice/'+id,code,undefined,{'X-Nexus-User':'bob'}),env);
+ assert.equal(bobRead.status,200);
+ assert.deepEqual(Buffer.from(await bobRead.arrayBuffer()),blob);
+ const missingHeader=await worker.fetch(req('GET','/voice/'+id,code),env);
+ assert.equal(missingHeader.status,401);
+ const wrongCode=await worker.fetch(req('GET','/voice/'+id,'Nexus_974',undefined,{'X-Nexus-User':'bob'}),env);
+ assert.equal(wrongCode.status,401);
+});
