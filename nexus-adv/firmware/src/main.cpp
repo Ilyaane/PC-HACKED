@@ -563,13 +563,14 @@ void handleInput(){
   static String lastChord="";
   if(!M5Cardputer.Keyboard.isPressed()){lastChord="";return;}
   const auto k=M5Cardputer.Keyboard.keysState();
-  const bool escPressed=k.opt || k.esc || (k.fn && M5Cardputer.Keyboard.isKeyPressed('`'));
-  const bool upPressed=k.up || M5Cardputer.Keyboard.isKeyPressed(';');
-  const bool downPressed=k.down || M5Cardputer.Keyboard.isKeyPressed('.');
-  const bool leftPressed=k.left || M5Cardputer.Keyboard.isKeyPressed(',');
-  const bool rightPressed=k.right || M5Cardputer.Keyboard.isKeyPressed('/');
+  // M5Cardputer 1.1.1 has only fn/opt/del/enter and printable keys.
+  const bool escPressed=k.opt || (k.fn && M5Cardputer.Keyboard.isKeyPressed('`'));
+  const bool upPressed=M5Cardputer.Keyboard.isKeyPressed(';');
+  const bool downPressed=M5Cardputer.Keyboard.isKeyPressed('.');
+  const bool leftPressed=M5Cardputer.Keyboard.isKeyPressed(',');
+  const bool rightPressed=M5Cardputer.Keyboard.isKeyPressed('/');
   String chord=String(k.fn?"F":"f")+String(k.shift?"S":"s")+
-    String(k.enter?"E":"")+String((k.del||k.backspace)?"D":"")+
+    String(k.enter?"E":"")+String(k.del?"D":"")+
     String(k.opt?"O":"")+
     String(upPressed?"U":"")+String(downPressed?"V":"")+
     String(leftPressed?"L":"")+String(rightPressed?"R":"");
@@ -652,7 +653,7 @@ void handleInput(){
     // Fn chords do not type punctuation into passwords or drafts.
     if(k.fn){return;}
     String& target=view==View::COMPOSE?editor:input;
-    const bool erase=(k.backspace||k.del)&&target.length();
+    const bool erase=k.del&&target.length();
     if(erase)target.remove(target.length()-1);
     bool edited=erase;
     for(char ch:k.word){
