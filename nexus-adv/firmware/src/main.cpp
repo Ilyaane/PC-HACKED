@@ -497,55 +497,142 @@ void playVoice(){
   }
   f.close();M5Cardputer.Speaker.end();setStatus(ok?"Lecture terminee":"Erreur de lecture");paint();
 }
+void openHomeSelection(){
+  switch(homeIndex){
+    case 0:pageHistory=0;textPage=0;pollInbox();changeView(View::HISTORY);
+      if(historySize)acknowledgeMessage(history[historySize-1].id);break;
+    case 1:changeView(View::COMPOSE);break;
+    case 2:changeView(View::SENT);refreshSent();break;
+    case 3:recordVoice();break;
+    case 4:uploadVoice();break;
+    case 5:playVoice();break;
+    case 6:wifiSetup();break;
+    case 7:configIndex=0;changeView(View::CONFIG);break;
+    case 8:changeView(View::DIAG);break;
+    case 9:if(!sdReady){initSd();setStatus(sdReady?"microSD reconnue":"microSD absente");}paint();break;
+    case 10:changeView(View::DISCARD_VOICE);break;
+  }
+}
 void handleInput(){
-  if(!(M5Cardputer.Keyboard.isChange()&&M5Cardputer.Keyboard.isPressed()))return;
+  // Library v1.1.1 uses Fn+;/. for arrows and Fn+backtick for Esc.
+  // isChange() only checks the number of pressed keys, so track whole chord instead.
+  static String lastChord="";
+  if(!M5Cardputer.Keyboard.isPressed()){lastChord="";return;}
   const auto k=M5Cardputer.Keyboard.keysState();
-  // M5Cardputer 1.1.1 exposes no esc/up/down members: use Fn+` / Fn+; / Fn+.
   const bool escPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('`');
   const bool upPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed(';');
   const bool downPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('.');
-  if(escPressed){
-    if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST) {
-      // Cancel a change without losing the saved Wi-Fi settings in RAM.
+  const bool leftPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed(',');
+  const bool rightPressed=k.fn && M5Cardputer.Keyboard.isKeyPressed('/');
+  String chord=String(k.fn?"F":"f")+String(k.shift?"S":"s")+
+    String(k.enter?"E":"")+String(k.del?"D":"");
+  for(char ch:k.word)chord+=ch;
+  if(chord==lastChord)return;
+  lastChord=chord;
+  if(escPressed || (leftPressed && view!=View::HISTORY)){
+    if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST || view==View::WIFI_CONFIRM){
       wifiSsid=prefs.getString("ssid","");wifiPass=prefs.getString("pwd","");
-    }
-    input="";changeView(View::HOME);return;
+      changeView(View::HOME);
+    }else if(view==View::EDIT_URL || view==View::EDIT_TOKEN || view==View::EDIT_PEER){
+      input="";changeView(View::CONFIG);
+    }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
+    else{changeView(View::HOME);}
+    return;
   }
-  if(view==View::WIFI_LIST){for(char ch:k.word){
-    if((ch=='n'||ch=='N') && (scanPage+1)*5<scanCount){scanPage++;paint();return;}
-    if((ch=='b'||ch=='B') && scanPage>0){scanPage--;paint();return;}
-    int index=scanPage*5+(ch-'1');
-    if(ch>='1'&&ch<='5'&&index<scanCount){wifiSsid=scanNames[index];input="";changeView(View::WIFI_PASSWORD);return;}
-  }return;}
+  const bool choose=k.enter||rightPressed;
+  if(view==View::HOME){
+    if(upPressed)homeIndex=(homeIndex+HOME_COUNT-1)%HOME_COUNT;
+    if(downPressed)homeIndex=(homeIndex+1)%HOME_COUNT;
+    if(choose){openHomeSelection();return;}
+    paint();return;
+  }
+  if(view==View::CONFIG){
+    if(upPressed)configIndex=(configIndex+CONFIG_COUNT-1)%CONFIG_COUNT;
+    if(downPressed)configIndex=(configIndex+1)%CONFIG_COUNT;
+    if(choose){
+      switch(configIndex){
+        case 0:input=serverUrl;changeView(View::EDIT_URL);return;
+        case 1:input="";changeView(View::EDIT_TOKEN);return;
+        case 2:input=recipient;changeView(View::EDIT_PEER);return;
+        case 3:wifiSetup();return;
+      }
+    }
+    paint();return;
+  }
   if(view==View::WIFI_CONFIRM){
-    if(k.enter){connectSaved();serverTest();changeView(View::HOME);return;}
-    for(char ch:k.word){if(ch=='n'||ch=='N'){scanWifi();return;}if(ch=='f'||ch=='F'){changeView(View::DELETE_CONFIRM);return;}}return;
-  }
-  if(view==View::DELETE_CONFIRM){if(k.enter){prefs.remove("ssid");prefs.remove("pwd");wifiSsid="";wifiPass="";WiFi.disconnect();setStatus("Wi-Fi oublie");scanWifi();}return;}
-  if(view==View::DISCARD_VOICE){if(k.enter){pendingVoiceId="";prefs.remove("vocid");if(sdReady)SD.remove(TX_AUDIO);setStatus("Brouillon vocal efface");changeView(View::HOME);}return;}
-  if(view==View::CONFIG){for(char ch:k.word){switch(ch){
-   case '1':input=serverUrl;changeView(View::EDIT_URL);return;
-   case '2':input="";changeView(View::EDIT_TOKEN);return;
-   case '3':input=recipient;changeView(View::EDIT_PEER);return;
-   case 'w':case 'W':wifiSetup();return;
-  }}return;}
-  if(view==View::WIFI_PASSWORD||view==View::EDIT_URL||view==View::EDIT_TOKEN||view==View::EDIT_PEER||view==View::COMPOSE){
-    String& target=(view==View::COMPOSE)?editor:input;
-    if(k.del){if(target.length())target.remove(target.length()-1);}
-    bool edited=false;
-    for(char ch:k.word){if(ch>=32&&ch<=126&&target.length()<((view==View::COMPOSE)?600:160)){target+=ch;edited=true;}}
-    if(view==View::COMPOSE && (edited||k.del) && pendingTextId.length()){
-      // A modified draft is a new message, not a retry of the previous request.
-      pendingTextId="";prefs.remove("txtid");
+    if(upPressed)confirmIndex=(confirmIndex+2)%3;
+    if(downPressed)confirmIndex=(confirmIndex+1)%3;
+    if(choose){
+      if(confirmIndex==0){
+        if(connectSaved())serverTest();changeView(View::HOME);return;
+      }
+      if(confirmIndex==1){scanWifi();return;}
+      if(confirmIndex==2){changeView(View::DELETE_CONFIRM);return;}
     }
-    if(view==View::COMPOSE)persistDraft();
+    paint();return;
+  }
+  if(view==View::WIFI_LIST){
+    if(scanCount){
+      if(upPressed)wifiIndex=(wifiIndex+scanCount-1)%scanCount;
+      if(downPressed)wifiIndex=(wifiIndex+1)%scanCount;
+      if(choose){chooseWiFi(wifiIndex);return;}
+    }
+    paint();return;
+  }
+  if(view==View::DELETE_CONFIRM){
+    if(choose){
+      forgetNetwork(wifiSsid);prefs.remove("ssid");prefs.remove("pwd");
+      wifiSsid="";wifiPass="";WiFi.disconnect();
+      serverReady=false;setStatus("Wi-Fi oublie");scanWifi();
+    }
+    return;
+  }
+  if(view==View::DISCARD_VOICE){
+    if(choose){pendingVoiceId="";prefs.remove("vocid");
+      if(sdReady)SD.remove(TX_AUDIO);
+      setStatus("Brouillon vocal efface");changeView(View::HOME);}
+    return;
+  }
+  if(view==View::WIFI_PASSWORD||view==View::EDIT_URL||view==View::EDIT_TOKEN||
+     view==View::EDIT_PEER||view==View::COMPOSE){
+    // Fn chords do not type punctuation into passwords or drafts.
+    if(k.fn){return;}
+    String& target=view==View::COMPOSE?editor:input;
+    const bool erase=k.del&&target.length();
+    if(erase)target.remove(target.length()-1);
+    bool edited=erase;
+    for(char ch:k.word){
+      if(ch>=32&&ch<=126&&target.length()<(view==View::COMPOSE?600u:160u)){
+        target+=ch;edited=true;
+      }
+    }
+    if(view==View::COMPOSE&&edited){
+      if(pendingTextId.length()){pendingTextId="";prefs.remove("txtid");}
+      persistDraft();
+    }
     if(k.enter){
       if(view==View::WIFI_PASSWORD){storeWiFiAfterTest(input);input="";return;}
-      if(view==View::EDIT_URL){input.trim();if(!input.startsWith("https://")||input.indexOf(' ',8)>=0){setStatus("HTTPS obligatoire");}
-        else{while(input.endsWith("/"))input.remove(input.length()-1);serverUrl=input;prefs.putString("server",serverUrl);serverReady=false;setStatus("Adresse enregistree");changeView(View::CONFIG);return;}}
-      if(view==View::EDIT_TOKEN){if(input.length()<12){setStatus("Jeton trop court");}else{deviceToken=input;prefs.putString("token",deviceToken);serverReady=false;input="";changeView(View::CONFIG);setStatus("Jeton enregistre");return;}}
-      if(view==View::EDIT_PEER){input.trim();if(input!="alice"&&input!="bob")setStatus("Choisir alice ou bob");
-        else{recipient=input;prefs.putString("peer",recipient);changeView(View::CONFIG);return;}}
+      if(view==View::EDIT_URL){
+        input.trim();
+        if(!input.startsWith("https://")||input.indexOf(' ',8)>=0){
+          setStatus("HTTPS obligatoire");
+        }else{
+          while(input.endsWith("/"))input.remove(input.length()-1);
+          serverUrl=input;prefs.putString("server",serverUrl);
+          serverReady=false;setStatus("Adresse enregistree");changeView(View::CONFIG);return;
+        }
+      }
+      if(view==View::EDIT_TOKEN){
+        if(input.length()<12){setStatus("Jeton trop court (12 min)");}
+        else{deviceToken=input;prefs.putString("token",deviceToken);
+          serverReady=false;input="";setStatus("Jeton enregistre");
+          changeView(View::CONFIG);return;}
+      }
+      if(view==View::EDIT_PEER){
+        input.trim();
+        if(input!="alice"&&input!="bob")setStatus("Choisir alice ou bob");
+        else{recipient=input;prefs.putString("peer",recipient);changeView(View::CONFIG);return;}
+      }
       if(view==View::COMPOSE){sendText();return;}
     }
     paint();return;
@@ -555,33 +642,19 @@ void handleInput(){
     if(upPressed&&pageHistory+1<historySize){pageHistory++;textPage=0;changed=true;}
     if(downPressed&&pageHistory>0){pageHistory--;textPage=0;changed=true;}
     if(historySize){
-      int i=historySize-1-pageHistory;
-      if(history[i].kind=="text") for(char ch:k.word){
+      const int i=historySize-1-pageHistory;
+      if(history[i].kind=="text"){
         const size_t pages=max(1,(int)((history[i].body.length()+92)/93));
-        if((ch=='n'||ch=='N') && textPage+1<pages)textPage++;
-        if((ch=='b'||ch=='B') && textPage>0)textPage--;
+        if(rightPressed&&textPage+1<pages)textPage++;
+        if(leftPressed&&textPage>0)textPage--;
       }
+      if(choose&&history[i].kind=="voice"){lastVoiceId=history[i].id;playVoice();}
     }
-    if(changed && historySize)acknowledgeMessage(history[historySize-1-pageHistory].id);
-    for(char ch:k.word)if(ch=='p'||ch=='P')playVoice();
+    if(changed&&historySize)acknowledgeMessage(history[historySize-1-pageHistory].id);
     paint();return;
   }
-  if(view==View::SENT){if(k.enter)refreshSent();return;}
-  if(view!=View::HOME)return;
-  for(char ch:k.word){switch(ch){
-    case 't':case 'T':changeView(View::COMPOSE);return;
-    case 'i':case 'I':pageHistory=0;textPage=0;pollInbox();changeView(View::HISTORY);
-      if(historySize)acknowledgeMessage(history[historySize-1].id);return;
-    case 'o':case 'O':changeView(View::SENT);refreshSent();return;
-    case 'r':case 'R':if(!sdReady){initSd();setStatus(sdReady?"microSD reconnue":"microSD absente");paint();}return;
-    case 'w':case 'W':wifiSetup();return;
-    case 'c':case 'C':changeView(View::CONFIG);return;
-    case 'd':case 'D':changeView(View::DIAG);return;
-    case 'v':case 'V':recordVoice();return;
-    case 'u':case 'U':uploadVoice();return;
-    case 'p':case 'P':playVoice();return;
-    case 'z':case 'Z':changeView(View::DISCARD_VOICE);return;
-  }}
+  if(view==View::SENT){if(choose)refreshSent();return;}
+  if(view==View::DIAG){if(choose){serverTest();paint();}return;}
 }
 } // namespace
 void setup(){
