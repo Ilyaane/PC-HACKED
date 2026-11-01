@@ -908,22 +908,6 @@ void openSectionSelection(){
   }
 }
 
-void openHomeSelection(){
-  switch(homeIndex){
-    case 0:pageHistory=0;textPage=0;pollInbox();changeView(View::HISTORY);
-      if(historySize)acknowledgeMessage(history[historySize-1].id);break;
-    case 1:changeView(View::COMPOSE);break;
-    case 2:changeView(View::SENT);refreshSent();break;
-    case 3:recordVoice();break;
-    case 4:uploadVoice();break;
-    case 5:playVoice();break;
-    case 6:wifiSetup();break;
-    case 7:configIndex=0;changeView(View::CONFIG);break;
-    case 8:changeView(View::DIAG);break;
-    case 9:if(!sdReady){initSd();setStatus(sdReady?"microSD reconnue":"microSD absente");}paint();break;
-    case 10:changeView(View::DISCARD_VOICE);break;
-  }
-}
 void handleInput(){
   // In menus the physical ; . , / keys work as arrows WITHOUT Fn.
   // Text/password editors retain their normal punctuation keys.
@@ -946,25 +930,50 @@ void handleInput(){
   if(chord==lastChord)return;
   lastChord=chord;
   const bool editing=(view==View::WIFI_PASSWORD || view==View::EDIT_URL ||
-    view==View::EDIT_TOKEN || view==View::EDIT_PEER || view==View::COMPOSE);
+    view==View::EDIT_TOKEN || view==View::EDIT_PEER || view==View::COMPOSE ||
+    view==View::MORSE_EDIT);
   // Comma and slash must remain typeable in text, URLs and Wi-Fi passwords.
-  if(escPressed || (leftPressed && !editing && view!=View::HISTORY)){
+  if(escPressed || (leftPressed && !editing && view!=View::HISTORY && view!=View::HOME)){
     if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST || view==View::WIFI_CONFIRM){
       wifiSsid=prefs.getString("ssid","");wifiPass=prefs.getString("pwd","");
       changeView(View::HOME);
     }else if(view==View::EDIT_URL || view==View::EDIT_TOKEN || view==View::EDIT_PEER){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
-    else{changeView(View::HOME);}
+    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::VOICE_ARCHIVE)
+      changeView(View::SECTION);
+    else if(view==View::SECTION)changeView(View::HOME);
+    else{changeView(View::SECTION);}
     return;
   }
-  const bool choose=k.enter||rightPressed;
+  const bool choose=k.enter||(rightPressed && view!=View::HOME);
   if(view==View::HOME){
     bool moved=false;
-    if(upPressed){homeIndex=(homeIndex+HOME_COUNT-1)%HOME_COUNT;moved=true;}
-    if(downPressed){homeIndex=(homeIndex+1)%HOME_COUNT;moved=true;}
-    if(choose){openHomeSelection();return;}
+    if(leftPressed){homeIndex=(homeIndex+HOME_COUNT-1)%HOME_COUNT;moved=true;}
+    if(rightPressed){homeIndex=(homeIndex+1)%HOME_COUNT;moved=true;}
+    if(k.enter){sectionIndex=0;changeView(View::SECTION);return;}
     if(moved)paint();return;
+  }
+  if(view==View::SECTION){
+    String options[6];const int count=sectionOptions(homeIndex,options);
+    bool moved=false;
+    if(upPressed){sectionIndex=(sectionIndex+count-1)%count;moved=true;}
+    if(downPressed){sectionIndex=(sectionIndex+1)%count;moved=true;}
+    if(choose){openSectionSelection();return;}
+    if(moved)paint();return;
+  }
+  if(view==View::VOICE_ARCHIVE){
+    if(voiceCount){
+      bool moved=false;
+      if(upPressed){voiceSelection=(voiceSelection+voiceCount-1)%voiceCount;moved=true;}
+      if(downPressed){voiceSelection=(voiceSelection+1)%voiceCount;moved=true;}
+      if(choose){
+        const VoiceArchive& e=voiceArchives[voiceCount-1-voiceSelection];
+        playArchiveWav(e.path);return;
+      }
+      if(moved)paint();
+    }
+    return;
   }
   if(view==View::CONFIG){
     bool moved=false;
@@ -1017,7 +1026,7 @@ void handleInput(){
     return;
   }
   if(view==View::WIFI_PASSWORD||view==View::EDIT_URL||view==View::EDIT_TOKEN||
-     view==View::EDIT_PEER||view==View::COMPOSE){
+     view==View::EDIT_PEER||view==View::COMPOSE||view==View::MORSE_EDIT){
     // Fn chords do not type punctuation into passwords or drafts.
     if(k.fn){return;}
     String& target=view==View::COMPOSE?editor:input;
@@ -1025,7 +1034,7 @@ void handleInput(){
     if(erase)target.remove(target.length()-1);
     bool edited=erase;
     for(char ch:k.word){
-      if(ch>=32&&ch<=126&&target.length()<(view==View::COMPOSE?600u:160u)){
+      if(ch>=32&&ch<=126&&target.length()<(view==View::COMPOSE?600u:view==View::MORSE_EDIT?70u:160u)){
         target+=ch;edited=true;
       }
     }
@@ -1034,6 +1043,13 @@ void handleInput(){
       persistDraft();
     }
     if(k.enter){
+      if(view==View::MORSE_EDIT){
+        morseOutput=NexusMorse::encode(input);
+        if(morseOutput.isEmpty())morseOutput="Aucun caractere pris en charge";
+        if(morseMode==1 && morseOutput!="Aucun caractere pris en charge")
+          playMorseAudio(morseOutput);
+        changeView(View::MORSE_RESULT);return;
+      }
       if(view==View::WIFI_PASSWORD){storeWiFiAfterTest(input);input="";return;}
       if(view==View::EDIT_URL){
         input.trim();
