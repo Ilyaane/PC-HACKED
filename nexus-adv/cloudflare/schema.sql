@@ -11,3 +11,4 @@ CREATE TABLE IF NOT EXISTS messages (
   UNIQUE(sender,client_id)
 );
 CREATE INDEX IF NOT EXISTS messages_inbox ON messages(recipient,id);
+CREATE INDEX IF NOT EXISTS messages_unread ON messages(recipient,read,id);
