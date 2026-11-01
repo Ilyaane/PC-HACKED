@@ -379,6 +379,115 @@ void storeWiFiAfterTest(const String& newPass){
   }
 }
 
+
+bool createSDPath(const String& folder) {
+  String part="";
+  for(size_t i=1;i<=folder.length();i++){
+    if(i==folder.length() || folder[i]=='/'){
+      const String piece=folder.substring(0,i);
+      if(piece.length() && !SD.exists(piece.c_str()) && !SD.mkdir(piece.c_str()))return false;
+    }
+  }
+  return true;
+}
+String voiceTime(uint32_t created){
+  if(created<1700000000UL)return "DATE_INCONNUE";
+  time_t sec=(time_t)created+4*3600;struct tm info={};gmtime_r(&sec,&info);
+  char b[24];strftime(b,sizeof(b),"%Y-%m-%d_%H-%M-%S",&info);return String(b);
+}
+String voiceFolder(uint32_t created,const String& sender){
+  String p=String(VOICE_ROOT)+"/RECUS";
+  if(created<1700000000UL)return p+"/DATE_INCONNUE/"+sender;
+  time_t sec=(time_t)created+4*3600;struct tm info={};gmtime_r(&sec,&info);
+  char b[16];strftime(b,sizeof(b),"/%Y/%m/%d",&info);return p+String(b)+"/"+sender;
+}
+String voiceFile(uint32_t id,uint32_t created,const String& sender){
+  return voiceFolder(created,sender)+"/"+voiceTime(created)+"_"+sender+"_ID"+String(id)+".wav";
+}
+bool wavFileValid(const String& path){
+  File f=SD.open(path.c_str(),FILE_READ);if(!f)return false;
+  size_t sz=f.size();uint8_t b[44];
+  bool ok=sz>=44 && sz<=MAX_VOICE && f.read(b,44)==44;f.close();
+  if(!ok)return false;
+  uint32_t riff=(uint32_t)b[4]|((uint32_t)b[5]<<8)|((uint32_t)b[6]<<16)|((uint32_t)b[7]<<24);
+  uint32_t data=(uint32_t)b[40]|((uint32_t)b[41]<<8)|((uint32_t)b[42]<<16)|((uint32_t)b[43]<<24);
+  return memcmp(b,"RIFF",4)==0 && memcmp(b+8,"WAVE",4)==0 &&
+    memcmp(b+12,"fmt ",4)==0 && memcmp(b+36,"data",4)==0 &&
+    riff==sz-8 && data==sz-44 &&
+    b[20]==1 && b[21]==0 && b[22]==1 && b[23]==0 &&
+    b[24]==0x80 && b[25]==0x3e && b[26]==0 && b[27]==0 &&
+    b[34]==16 && b[35]==0;
+}
+String archivedPathById(uint32_t id){
+  if(!sdReady || !SD.exists(VOICE_INDEX))return "";
+  File f=SD.open(VOICE_INDEX,FILE_READ);if(!f)return "";
+  const String prefix=String(id)+"|";String found="";
+  while(f.available()){
+    String line=f.readStringUntil('\n');line.trim();
+    if(!line.startsWith(prefix))continue;
+    const int last=line.lastIndexOf('|');
+    if(last>0)found=line.substring(last+1);
+  }f.close();return found;
+}
+bool writeArchiveIndex(uint32_t id,uint32_t created,const String& sender,const String& path){
+  if(archivedPathById(id).length())return true;
+  File f=SD.open(VOICE_INDEX,FILE_APPEND);if(!f)return false;
+  const String line=String(id)+"|"+sender+"|"+voiceTime(created)+"|"+path+"\n";
+  bool ok=f.print(line)==line.length();f.flush();f.close();return ok;
+}
+bool saveVoiceArchive(uint32_t id,const String& sender,uint32_t created){
+  if(!id || !sdReady || (sender!="alice" && sender!="bob"))return false;
+  const String path=voiceFile(id,created,sender);
+  if(!createSDPath(voiceFolder(created,sender)))return false;
+  if(wavFileValid(path))return writeArchiveIndex(id,created,sender,path);
+  if(SD.exists(path.c_str()))return false; // never overwrite damaged files
+  WiFiClientSecure client;HTTPClient http;
+  if(!openHttp(http,client,"/voice/"+String(id)))return false;
+  const int code=http.GET(),sz=http.getSize();
+  if(code!=200 || sz<44 || sz>(int)MAX_VOICE){http.end();return false;}
+  const String temp=path+".part";
+  SD.remove(temp.c_str());
+  File out=SD.open(temp.c_str(),FILE_WRITE);
+  if(!out){http.end();return false;}
+  uint8_t buffer[1024];int got=0;uint32_t progress=millis();bool ok=true;
+  WiFiClient* network=http.getStreamPtr();
+  while(got<sz && millis()-progress<12000){
+    const int available=network->available();
+    if(available>0){
+      const size_t count=min((size_t)available,min(sizeof(buffer),(size_t)(sz-got)));
+      const int n=network->readBytes(buffer,count);
+      if(n<=0 || out.write(buffer,n)!=(size_t)n){ok=false;break;}
+      got+=n;progress=millis();
+    }else delay(5);
+  }
+  out.flush();out.close();http.end();
+  if(!ok || got!=sz || !wavFileValid(temp)){
+    SD.remove(temp.c_str());return false;
+  }
+  if(!SD.rename(temp.c_str(),path.c_str())){SD.remove(temp.c_str());return false;}
+  return writeArchiveIndex(id,created,sender,path);
+}
+void listVoiceArchives(){
+  voiceCount=0;voiceSelection=0;
+  if(!sdReady)return;
+  File f=SD.open(VOICE_INDEX,FILE_READ);if(!f)return;
+  while(f.available()){
+    String line=f.readStringUntil('\n');line.trim();
+    int a=line.indexOf('|'),b=line.indexOf('|',a+1),c=line.indexOf('|',b+1);
+    if(a<1 || b<=a || c<=b)continue;
+    VoiceArchive entry;
+    entry.id=(uint32_t)line.substring(0,a).toInt();
+    entry.sender=line.substring(a+1,b);entry.stamp=line.substring(b+1,c);
+    entry.path=line.substring(c+1);
+    if(!entry.id || !entry.path.startsWith(String(VOICE_ROOT)+"/RECUS/"))continue;
+    if(voiceCount==VOICE_LIST_MAX){
+      for(int j=1;j<VOICE_LIST_MAX;j++)voiceArchives[j-1]=voiceArchives[j];
+      --voiceCount;
+    }
+    voiceArchives[voiceCount++]=entry;
+  }f.close();
+}
+
 void pollInbox(){
   if(!configured()||WiFi.status()!=WL_CONNECTED)return;
   WiFiClientSecure client;HTTPClient http;
@@ -392,6 +501,15 @@ void pollInbox(){
     uint32_t id=m["id"]|0u;if(id<=cursor)continue;
     String sender=m["sender"]|"?",kind=m["kind"]|"?";
     String text=kind=="voice"?"Message vocal #"+String(id):m["text"].as<String>();
+    // The message cursor cannot move past a voice before the WAV is on microSD.
+    // Failure retries on the next poll instead of silently losing the archive.
+    if(kind=="voice" && sdReady) {
+      const uint32_t created=m["created"]|0u;
+      if(!saveVoiceArchive(id,sender,created)){
+        setStatus("Vocal non archive: verifier microSD / reseau");
+        break;
+      }
+    }
     if(!remember(id,sender,kind,text)) {
       setStatus("microSD: historique non sauvegarde");
       break; // Do not advance persistent cursor and silently lose a message.
