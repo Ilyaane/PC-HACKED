@@ -73,6 +73,17 @@ export default {
    const sender=await identify(request,env);
    if(!sender) return fail(401,'Unauthorized');
    if(request.method==='GET' && pathname==='/session') return reply({ok:true,user:sender});
+   if(request.method==='GET' && pathname==='/unread') {
+     // Authoritative unread state, including messages delivered while a device was off.
+     const summary=await env.DB.prepare(`SELECT COUNT(*) AS unread FROM messages
+       WHERE recipient=? AND read=0`).bind(sender).first();
+     const latest=await env.DB.prepare(`SELECT id,sender,kind,body_text AS text,created
+       FROM messages WHERE recipient=? AND read=0 ORDER BY id DESC LIMIT 1`).bind(sender).first();
+     return reply({unread:Number(summary?.unread||0),
+       latest:latest?{id:latest.id,sender:latest.sender,kind:latest.kind,
+         preview:latest.kind==='text'?String(latest.text||'').slice(0,72):'Message vocal',
+         created:latest.created}:null});
+   }
    if(request.method==='GET' && pathname==='/outbox') {
      const after=Number(url.searchParams.get('after')||0);
      if(!Number.isSafeInteger(after)||after<0) return fail(400,'Invalid cursor');
