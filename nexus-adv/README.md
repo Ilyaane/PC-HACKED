@@ -1,6 +1,6 @@
-# NEXUS Messagerie pour Cardputer ADV — v0.6 (code partagé)
+# NEXUS Messagerie pour Cardputer ADV — v0.7 (stabilité clavier/Wi-Fi)
 
-Projet **M5Stack Cardputer ADV** (ESP32-S3, 8 Mo de flash). La v0.6 conserve l'interface menus et le Wi-Fi mémorisé de v0.5 et ajoute l'option d'un code partagé entre deux appareils. Le serveur Cloudflare Workers + D1 **NEXUS** a été déployé et testé avec les jetons existants à l'adresse `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Le nouveau firmware v0.6 doit être validé par la compilation GitHub Actions et par des essais réels sur Cardputer ADV avant d'être considéré comme testé matériellement.
+Projet **M5Stack Cardputer ADV** (ESP32-S3, 8 Mo de flash). La v0.7 conserve les fonctions texte et vocal, le code commun et les réseaux enregistrés. Elle corrige la navigation sans Fn dans les menus, limite les rafraîchissements de l'écran et vérifie les écritures NVS pour éviter les faux messages « sauvegardé ». Le serveur Cloudflare Workers + D1 **NEXUS** a été déployé et testé avec les jetons existants à l'adresse `https://nexus-messagerie.ilyaane-patel1.workers.dev`. Le nouveau firmware v0.7 doit être validé par la compilation GitHub Actions et par des essais réels sur Cardputer ADV avant d'être considéré comme testé matériellement.
 
 ## Menus et navigation
 
@@ -61,3 +61,14 @@ Workflow : `.github/workflows/nexus-adv-build.yml`. Il lance :
 L'artifact GitHub contient `firmware.bin` (pour l'offset 0x10000) et `NEXUS_ADV_full_flash_0x0.bin` (pour 0x0). Les tests automatiques ne prouvent pas la qualité de l'écran sur un matériel physique. Tester les flèches, la connexion sans ressaisie du Wi-Fi, la saisie visible et l'envoi/réception texte et vocal sur **deux appareils**.
 
 Le projet NEXUS utilise le Worker `nexus-messagerie` et la base D1 `nexus-messagerie`. Il ne doit pas toucher au projet Déclic Cloudflare Pages.
+
+
+## Correctifs v0.7
+
+- Dans les menus : `;` monter, `.` descendre, Entrée valider, OPT revenir, **sans Fn**.
+- Dans les champs de saisie : ponctuation normale, sans quitter le champ quand on tape une virgule.
+- L'affichage ne se vide plus complètement à chaque touche : rafraîchissement des lignes et sélections nécessaires uniquement.
+- L'enregistrement de l'adresse, du jeton et du Wi-Fi est **contrôlé par relecture immédiate** dans Preferences/NVS. Le message d'erreur signale les écritures qui échouent.
+- Menu **Diagnostics** : affiche le rôle ALICE/BOB, l'état du Wi-Fi, du serveur, de la mémoire NVS et la présence du code / de l'adresse, sans afficher les secrets.
+
+Deux Cardputer peuvent présenter des résultats différents avec le même `.bin` : états NVS/partition, réseau Wi-Fi et configuration mémorisée varient. Si l'un perd ses paramètres après redémarrage, vérifier « Diagnostics > NVS ». Un flashage complet à `0x0` est une opération distincte qui peut modifier/effacer la configuration préexistante; ne pas l'effectuer sur le Cardputer opérationnel sans sauvegarde. Un simple fichier `firmware.bin` s'installe à `0x10000` **uniquement si la table des partitions installée correspond bien à la compilation**. Ne pas intervertir les adresses.
