@@ -40,7 +40,7 @@ checks={
  'WAV rollback': 'SD.rename(RX_BACKUP,RX_AUDIO)' in cpp,
  'WAV plays with I2S': 'M5Cardputer.Speaker.playRaw(samples,bytes/2,AUDIO_RATE' in cpp,
  'Never use mic and speaker concurrently': 'M5Cardputer.Mic.end()' in cpp and 'M5Cardputer.Speaker.end()' in cpp,
- 'Wi-Fi persist after success': 'prefs.putString("ssid",ssid)' in cpp and 'prefs.putString("pwd",pass)' in cpp,
+ 'Wi-Fi persist after success': 'saveSetting("ssid",ssid)' in cpp and 'saveSetting("pwd",pass)' in cpp,
  'Wi-Fi success and NO branch': 'case View::WIFI_CONFIRM' in cpp and 'scanWifi();return;' in cpp,
  'Wi-Fi retry': 'WiFi.reconnect()' in cpp,
  'HTTPS root certificates': 'client.setCACert(NEXUS_TRUSTED_ROOTS)' in cpp,
