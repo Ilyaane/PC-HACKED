@@ -234,11 +234,26 @@ bool connectSaved(){
   setStatus("Wi-Fi connecte / test TLS");
   timeReady();return true;
 }
+bool connectRememberedWiFi(){
+  const String previousSsid=wifiSsid,previousPass=wifiPass;
+  if(!wifiSsid.isEmpty() && connectSaved())return true;
+  for(int slot=0;slot<WIFI_SLOTS;slot++){
+    const String ssid=prefs.getString(wifiKey(slot,'s').c_str(),"");
+    if(ssid.isEmpty()||ssid==previousSsid)continue;
+    wifiSsid=ssid;wifiPass=prefs.getString(wifiKey(slot,'p').c_str(),"");
+    if(connectSaved()){
+      prefs.putString("ssid",wifiSsid);prefs.putString("pwd",wifiPass);
+      return true;
+    }
+  }
+  wifiSsid=previousSsid;wifiPass=previousPass;
+  return false;
+}
 bool configured(){return serverUrl.startsWith("https://") && !serverUrl.endsWith("/") && deviceToken.length()>=12;}
 
 bool openHttp(HTTPClient& http, WiFiClientSecure& client,const String& path){
   if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi deconnecte");return false;}
-  if(!configured()){setStatus("Regler serveur + jeton (C)");return false;}
+  if(!configured()){setStatus("Regler serveur et jeton");return false;}
   if(!timeReady()){setStatus("Horloge non synchronisee");return false;}
   client.setCACert(NEXUS_TRUSTED_ROOTS);
   client.setTimeout(10000);
@@ -248,7 +263,7 @@ bool openHttp(HTTPClient& http, WiFiClientSecure& client,const String& path){
   return true;
 }
 bool serverTest(){
-  if(!configured()) {serverReady=false;setStatus("Configurer serveur et jeton (C)");return false;}
+  if(!configured()) {serverReady=false;setStatus("Configurer serveur et jeton");return false;}
   WiFiClientSecure client;HTTPClient http;
   if(!openHttp(http,client,"/session")){serverReady=false;return false;}
   int code=http.GET();String response=code==200?http.getString():"";
@@ -283,7 +298,6 @@ void chooseWiFi(int selected){
   if(scanOpen[selected]){storeWiFiAfterTest("");return;}
   input="";changeView(View::WIFI_PASSWORD);
 }
-void storeWiFiAfterTest(const String& newPass); // forward declaration
 void storeWiFiAfterTest(const String& newPass){
   String ssid=wifiSsid,pass=newPass;
   const String oldSsid=prefs.getString("ssid","");
@@ -662,8 +676,8 @@ void setup(){
  M5Cardputer.Display.setRotation(1);
  loadSettings();initSd();paint();
  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
- if(!wifiSsid.isEmpty()){connectSaved();if(netReady)serverTest();}
- else{setStatus("Configurer le Wi-Fi (W)");}
+ if(connectRememberedWiFi()){serverTest();}
+  else{setStatus("Choisir le Wi-Fi dans le menu");}
  paint();
 }
 void loop(){
