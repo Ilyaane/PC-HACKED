@@ -165,10 +165,12 @@ void paint(){
    }
    break;}
  case View::SENT:drawLines("DERNIER ENVOI",clipped(lastSentInfo,33),"ENTREE: actualiser", "ESC: retour");break;
- case View::DIAG: drawLines("DIAGNOSTIC", "Wi-Fi: "+String(WiFi.status()==WL_CONNECTED?"OK":"KO")+" code "+String((int)WiFi.status()),
-    "HTTPS: "+String(serverReady?"OK":"non verifie")+"  NVS: "+String(!prefsReady?"ERR":storageFault?"ERREUR":"OK"),
-    "Config: "+String(serverUrl.length()?"URL ":"- ")+String(deviceToken.length()?"TOKEN":"-"),
-    "IP: "+WiFi.localIP().toString(),"Entree: tester serveur");break;
+ case View::DIAG: drawLines("DIAGNOSTIC",
+    "Appareil: "+String(recipient=="bob"?"ALICE":"BOB")+" vers "+recipient,
+    "Wi-Fi: "+String(WiFi.status()==WL_CONNECTED?"OK ":"KO ")+clipped(wifiSsid,20),
+    "HTTPS: "+String(serverReady?"OK":"NON")+"   NVS: "+String(!prefsReady?"KO":storageFault?"ERREUR":"OK"),
+    "Config: "+String(serverUrl.length()?"URL ":"- ")+String(deviceToken.length()?"CODE":"-"),
+    "Entree: retester serveur");break;
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
  }
@@ -186,7 +188,7 @@ bool saveSetting(const char* key, const String& value){
 }
 String wifiKey(int slot,char type){return String("w")+type+String(slot);}
 int wifiSlot(const String& ssid){
-  if(ssid.isEmpty())return -1;
+  if(ssid.isEmpty() || !prefsReady)return -1;
   for(int i=0;i<WIFI_SLOTS;i++)
     if(prefs.getString(wifiKey(i,'s').c_str(),"")==ssid)return i;
   return -1;
@@ -258,7 +260,9 @@ bool timeReady(){
 }
 bool connectSaved(){
   if(wifiSsid.isEmpty()) {setStatus("Aucun Wi-Fi memorise");netReady=false;return false;}
-  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);WiFi.begin(wifiSsid.c_str(),wifiPass.c_str());
+  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
+  WiFi.disconnect(false,false);delay(80);
+  WiFi.begin(wifiSsid.c_str(),wifiPass.c_str());
   setStatus("Connexion Wi-Fi...");paint();
   for(int i=0;i<50&&WiFi.status()!=WL_CONNECTED;i++)delay(200);
   netReady=WiFi.status()==WL_CONNECTED;
@@ -267,6 +271,7 @@ bool connectSaved(){
   timeReady();return true;
 }
 bool connectRememberedWiFi(){
+  if(!prefsReady)return false;
   const String previousSsid=wifiSsid,previousPass=wifiPass;
   if(!wifiSsid.isEmpty() && connectSaved())return true;
   for(int slot=0;slot<WIFI_SLOTS;slot++){
