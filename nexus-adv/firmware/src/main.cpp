@@ -39,6 +39,7 @@ uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
 constexpr uint8_t HOME_COUNT=11, CONFIG_COUNT=4, WIFI_SLOTS=5;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
 uint8_t textPage=0;
+bool fullRepaint=true;
 struct History {uint32_t id=0; String sender,kind,body;};
 History history[8];
 uint8_t historySize=0;
@@ -49,21 +50,26 @@ void persistDraft(){ prefs.putString("draft",editor); }
 void setStatus(const String& msg){ statusLine=clipped(msg,60);Serial.println("NEXUS: "+statusLine); }
 void drawLines(const String& title,const String& a="",const String& b="",const String& c="",const String& d="",const String& e=""){
   auto& l=M5Cardputer.Display;
-  // Paint only the changed regions. Full-screen clears caused visible flashing.
-  l.fillRect(0,0,240,21,COL_PANEL);l.fillRect(0,21,240,114,COL_BG);
+  // First frame or page transition: clear once. Keystrokes repaint only text rows.
+  if(fullRepaint)l.fillScreen(COL_BG);
+  l.fillRect(0,0,240,21,COL_PANEL);
   l.setTextColor(COL_ACCENT,COL_PANEL);l.setTextSize(1);
   l.setCursor(7,7);l.print(clipped(title,27));
   l.setTextColor(WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN,COL_PANEL);
   l.setCursor(198,7);l.print(WiFi.status()==WL_CONNECTED?"WiFi":"OFF");
   l.setTextColor(COL_TEXT,COL_BG);
   const String lines[]={a,b,c,d,e};
-  for(int i=0;i<5;++i){l.setCursor(7,26+i*17);l.print(clipped(lines[i],37));}
+  for(int i=0;i<5;++i){
+    l.fillRect(5,25+i*17,234,15,COL_BG);
+    l.setCursor(7,26+i*17);l.print(clipped(lines[i],37));
+  }
   l.drawFastHLine(0,114,240,COL_PANEL);
+  l.fillRect(0,115,240,20,COL_BG);
   l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,120);l.print(clipped(statusLine,37));
 }
 void menuFrame(const String& title){
   auto& l=M5Cardputer.Display;
-  l.fillRect(0,0,240,23,COL_BG);
+  if(fullRepaint)l.fillScreen(COL_BG);
   l.fillRoundRect(2,2,236,20,5,COL_PANEL);
   l.fillRoundRect(7,6,11,11,3,COL_ACCENT);
   l.setTextColor(COL_BG,COL_ACCENT);
@@ -75,8 +81,11 @@ void menuFrame(const String& title){
 void drawMenu(const String& title,const String opts[],int count,int selected,
               const String& hint="; Haut   . Bas   Entree OK"){
   auto& l=M5Cardputer.Display; menuFrame(title);
-  l.fillRect(0,23,240,91,COL_BG); // Clean only list region, never flash whole screen.
+  static int prevStart=-1;
   const int start=(selected/5)*5;
+  // Redraw individual selection rows. Never wipe the list on each keystroke.
+  if(fullRepaint||start!=prevStart)l.fillRect(0,23,240,91,COL_BG);
+  prevStart=start;
   for(int r=0;r<5;r++){
     const int idx=start+r;
     if(idx>=count)break;
@@ -97,6 +106,10 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
   l.setCursor(200,119);l.print("; . OK");
 }
 void paint(){
+ static bool firstFrame=true;
+ static View lastView=View::HOME;
+ fullRepaint=firstFrame || lastView!=view;
+ firstFrame=false;lastView=view;
  switch(view){
  case View::HOME: {
    const String opts[]={"Messages recus","Ecrire un message","Messages envoyes","Enregistrer un vocal",
