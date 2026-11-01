@@ -130,7 +130,9 @@ int sectionOptions(int section,String items[]){
 void drawHome(){
   auto& l=M5Cardputer.Display;
   static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME"};
-  l.fillScreen(COL_BG);
+  if(fullRepaint)l.fillScreen(COL_BG);
+  l.fillRect(0,0,240,26,COL_BG);
+  l.fillRect(0,26,240,88,COL_BG);
   l.fillRoundRect(3,3,234,22,5,COL_PANEL);
   l.setTextColor(COL_TEXT,COL_PANEL);l.setTextSize(1);l.setCursor(12,11);l.print("NEXUS");
   l.fillCircle(211,14,4,WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN);
@@ -829,7 +831,7 @@ void decodeMorseMicrophone(){
   int16_t samples[chunk];
   morseOutput="";setStatus("Ecoute Morse (environ 5 secondes)");paint();
   float maxEnergy=0;
-  const float coeff=2*cosf(2*3.141592653589793f*880*chunk/AUDIO_RATE);
+  const float coeff=2*cosf(2*3.141592653589793f*880/AUDIO_RATE);
   bool good=true;int n=0;
   for(int k=0;k<chunks;k++){
     if(!M5Cardputer.Mic.record(samples,chunk,AUDIO_RATE,false)){good=false;break;}
