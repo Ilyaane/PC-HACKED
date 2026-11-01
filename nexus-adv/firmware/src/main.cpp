@@ -563,19 +563,23 @@ void handleInput(){
   static String lastChord="";
   if(!M5Cardputer.Keyboard.isPressed()){lastChord="";return;}
   const auto k=M5Cardputer.Keyboard.keysState();
-  const bool escPressed=k.esc || (k.fn && M5Cardputer.Keyboard.isKeyPressed('`'));
+  const bool escPressed=k.opt || k.esc || (k.fn && M5Cardputer.Keyboard.isKeyPressed('`'));
   const bool upPressed=k.up || M5Cardputer.Keyboard.isKeyPressed(';');
   const bool downPressed=k.down || M5Cardputer.Keyboard.isKeyPressed('.');
   const bool leftPressed=k.left || M5Cardputer.Keyboard.isKeyPressed(',');
   const bool rightPressed=k.right || M5Cardputer.Keyboard.isKeyPressed('/');
   String chord=String(k.fn?"F":"f")+String(k.shift?"S":"s")+
-    String(k.enter?"E":"")+String(k.del?"D":"")+
+    String(k.enter?"E":"")+String((k.del||k.backspace)?"D":"")+
+    String(k.opt?"O":"")+
     String(upPressed?"U":"")+String(downPressed?"V":"")+
     String(leftPressed?"L":"")+String(rightPressed?"R":"");
   for(char ch:k.word)chord+=ch;
   if(chord==lastChord)return;
   lastChord=chord;
-  if(escPressed || (leftPressed && view!=View::HISTORY)){
+  const bool editing=(view==View::WIFI_PASSWORD || view==View::EDIT_URL ||
+    view==View::EDIT_TOKEN || view==View::EDIT_PEER || view==View::COMPOSE);
+  // Comma and slash must remain typeable in text, URLs and Wi-Fi passwords.
+  if(escPressed || (leftPressed && !editing && view!=View::HISTORY)){
     if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST || view==View::WIFI_CONFIRM){
       wifiSsid=prefs.getString("ssid","");wifiPass=prefs.getString("pwd","");
       changeView(View::HOME);
@@ -648,7 +652,7 @@ void handleInput(){
     // Fn chords do not type punctuation into passwords or drafts.
     if(k.fn){return;}
     String& target=view==View::COMPOSE?editor:input;
-    const bool erase=k.del&&target.length();
+    const bool erase=(k.backspace||k.del)&&target.length();
     if(erase)target.remove(target.length()-1);
     bool edited=erase;
     for(char ch:k.word){
@@ -706,7 +710,7 @@ void handleInput(){
       if(choose&&history[i].kind=="voice"){lastVoiceId=history[i].id;playVoice();}
     }
     if(changed&&historySize)acknowledgeMessage(history[historySize-1-pageHistory].id);
-    paint();return;
+    if(changed||leftPressed||rightPressed)paint();return;
   }
   if(view==View::SENT){if(choose)refreshSent();return;}
   if(view==View::DIAG){if(choose){serverTest();paint();}return;}
@@ -718,7 +722,7 @@ void setup(){
  loadSettings();initSd();paint();
  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
  if(connectRememberedWiFi()){serverTest();}
-  else{setStatus("Choisir le Wi-Fi dans le menu");}
+  else if(!storageFault){setStatus("Choisir le Wi-Fi dans le menu");}
  paint();
 }
 void loop(){
