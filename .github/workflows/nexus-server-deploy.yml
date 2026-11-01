@@ -1,0 +1,56 @@
+name: NEXUS Server - Cloudflare deploy and smoke tests
+on:
+  workflow_dispatch:
+  push:
+    branches: [nexus-adv-build]
+    paths:
+      - 'nexus-adv/cloudflare/**'
+      - '.github/workflows/nexus-server-deploy.yml'
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: d193a5bdf26c5d89d56d29400f9dfbfe
+      NEXUS_ALICE_TOKEN: ${{ secrets.NEXUS_ALICE_TOKEN }}
+      NEXUS_BOB_TOKEN: ${{ secrets.NEXUS_BOB_TOKEN }}
+      NEXUS_SHARED_TOKEN: ${{ secrets.NEXUS_SHARED_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify server tests before deployment
+        run: node --test nexus-adv/cloudflare/tests/worker.test.mjs
+      - name: Check Cloudflare credentials without exposing them
+        run: |
+          for secret in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID; do
+            if [ -z "${!secret}" ]; then echo "Missing GitHub secret: $secret"; exit 1; fi
+          done
+          if [ -z "$NEXUS_SHARED_TOKEN" ] && { [ -z "$NEXUS_ALICE_TOKEN" ] || [ -z "$NEXUS_BOB_TOKEN" ]; }; then
+            echo 'Missing device credentials: configure NEXUS_SHARED_TOKEN or both legacy tokens'; exit 1
+          fi
+      - name: Diagnose Cloudflare API account and access
+        run: |
+          node --input-type=module - <<'NODE'
+          const id = process.env.CLOUDFLARE_ACCOUNT_ID || '';
+          const token = process.env.CLOUDFLARE_API_TOKEN || '';
+          console.log('Account ID has 32 hex characters:', /^[a-f0-9]{32}$/i.test(id));
+          console.log('Account ID matches Cloudflare dashboard:', id === 'd193a5bdf26c5d89d56d29400f9dfbfe');
+          async function check(path) {
+            try {
+              const r = await fetch('https://api.cloudflare.com/client/v4/' + path, {headers:{Authorization:'Bearer '+token}});
+              const j = await r.json();
+              const codes = (j.errors||[]).map(e=>e.code);
+              console.log(path.split('/').slice(-2).join('/'), 'HTTP',r.status,'success',j.success===true,'error codes',JSON.stringify(codes));
+            } catch(e) { console.log('Cloudflare API test failed:',e.name); }
+          }
+          await check('accounts/'+id+'/tokens/verify');
+          await check('accounts/'+id+'/d1/database');
+          NODE
+      - name: Deploy D1 and Worker, then smoke-test authentication
+        working-directory: nexus-adv/cloudflare
+        run: node deploy-ci.mjs
