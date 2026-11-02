@@ -38,7 +38,11 @@ String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 uint32_t pendingReadId=0, draftChangedAt=0;
 bool draftDirty=false, wifiScanPending=false;
-uint32_t wifiScanStartedAt=0;
+uint32_t wifiScanStartedAt=0, wifiAttemptStartedAt=0;
+enum class WifiAttempt { NONE, BOOT, USER };
+WifiAttempt wifiAttempt=WifiAttempt::NONE;
+int bootWifiSlot=0;
+String wifiAttemptSsid, wifiAttemptPass, wifiPreviousSsid, wifiPreviousPass;
 uint32_t unreadCount=0, latestUnreadId=0;
 String latestUnreadPreview, latestUnreadSender;
 bool unreadSynced=false;
@@ -519,7 +523,64 @@ bool serverTest(){
   setStatus(serverReady?"Serveur NEXUS OK":("Serveur inaccessible: "+String(code)));
   return serverReady;
 }
+// Async Wi-Fi state machine: keyboard processing never waits for association.
+void beginWifiAsync(const String& ssid,const String& pass,bool boot){
+  if(ssid.isEmpty())return;
+  if(wifiScanPending){wifiScanPending=false;WiFi.scanDelete();}
+  wifiPreviousSsid=prefsReady?prefs.getString("ssid",""):wifiSsid;
+  wifiPreviousPass=prefsReady?prefs.getString("pwd",""):wifiPass;
+  wifiAttemptSsid=ssid;wifiAttemptPass=pass;
+  wifiAttempt=boot?WifiAttempt::BOOT:WifiAttempt::USER;
+  wifiAttemptStartedAt=millis();
+  if(WiFi.status()!=WL_CONNECTED || WiFi.SSID()!=ssid){
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false,false);
+    WiFi.begin(ssid.c_str(),pass.c_str());
+  }
+  setStatus("Connexion Wi-Fi en cours, clavier actif");
+}
+void servicePendingWifi(){
+  if(wifiAttempt==WifiAttempt::NONE)return;
+  if(WiFi.status()==WL_CONNECTED && WiFi.SSID()==wifiAttemptSsid){
+    const bool boot=wifiAttempt==WifiAttempt::BOOT;
+    wifiAttempt=WifiAttempt::NONE;
+    wifiSsid=wifiAttemptSsid;wifiPass=wifiAttemptPass;netReady=true;serverReady=false;
+    const bool changed=wifiSsid!=wifiPreviousSsid;
+    if(!boot || changed){
+      const bool ok=saveSetting("pwd",wifiPass) &&
+        saveSetting("ssid",wifiSsid) && rememberNetwork(wifiSsid,wifiPass);
+      setStatus(ok?"Wi-Fi memorise, interface active":"Wi-Fi OK / sauvegarde NVS impossible");
+    }else setStatus("Wi-Fi connecte, interface active");
+    lastCheck=millis(); // allow loop to run before a background server poll
+    if(!boot && (view==View::WIFI_LIST || view==View::WIFI_PASSWORD || view==View::WIFI_CONFIRM))
+      changeView(View::HOME);
+    else if(view==View::DIAG || view==View::HOME)paint();
+    return;
+  }
+  if(millis()-wifiAttemptStartedAt<9000)return;
+  if(wifiAttempt==WifiAttempt::BOOT){
+    while(prefsReady && bootWifiSlot<WIFI_SLOTS){
+      const int slot=bootWifiSlot++;
+      const String ssid=prefs.getString(wifiKey(slot,'s').c_str(),"");
+      if(ssid.isEmpty() || ssid==wifiPreviousSsid)continue;
+      const String pass=prefs.getString(wifiKey(slot,'p').c_str(),"");
+      beginWifiAsync(ssid,pass,true);return;
+    }
+    wifiAttempt=WifiAttempt::NONE;
+    wifiSsid=wifiPreviousSsid;wifiPass=wifiPreviousPass;
+    setStatus("Wi-Fi absent: clavier et menus disponibles");
+    return;
+  }
+  wifiAttempt=WifiAttempt::NONE;
+  wifiSsid=wifiPreviousSsid;wifiPass=wifiPreviousPass;
+  if(!wifiSsid.isEmpty())WiFi.begin(wifiSsid.c_str(),wifiPass.c_str());
+  setStatus("Echec de connexion; ancien Wi-Fi conserve");
+  if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST)
+    changeView(wifiSsid.isEmpty()?View::WIFI_LIST:View::WIFI_CONFIRM);
+}
 void scanWifi(){
+  // Let the user explicitly switch to discovery even during auto-reconnect.
+  wifiAttempt=WifiAttempt::NONE;
   scanCount=0;scanPage=0;wifiIndex=0;
   changeView(View::WIFI_LIST);
   setStatus("Recherche Wi-Fi...");paint();
@@ -567,25 +628,9 @@ void chooseWiFi(int selected){
   input="";changeView(View::WIFI_PASSWORD);
 }
 void storeWiFiAfterTest(const String& newPass){
-  String ssid=wifiSsid,pass=newPass;
-  const String oldSsid=prefs.getString("ssid","");
-  const String oldPass=prefs.getString("pwd","");
-  wifiPass=pass;
-  if(connectSaved()){
-    const bool saved=saveSetting("pwd",pass) && saveSetting("ssid",ssid) && rememberNetwork(ssid,pass);
-    if(!saved){
-      setStatus("Wi-Fi connecte, ENREGISTREMENT NVS KO");
-      changeView(View::HOME);return;
-    }
-    const bool hasServer=serverTest();
-    setStatus(hasServer ? "Wi-Fi et serveur OK" : "Wi-Fi OK / serveur indisponible");
-    changeView(View::HOME);
-  }else{
-    wifiSsid=oldSsid;wifiPass=oldPass;
-    if(!oldSsid.isEmpty()){WiFi.disconnect();WiFi.begin(oldSsid.c_str(),oldPass.c_str());}
-    setStatus("Echec: ancien reseau conserve");
-    if(oldSsid.isEmpty())scanWifi();else changeView(View::WIFI_CONFIRM);
-  }
+  // Do not call connectSaved/serverTest here: both block the keyboard.
+  beginWifiAsync(wifiSsid,newPass,false);
+  changeView(View::WIFI_LIST);
 }
 
 
@@ -1340,7 +1385,7 @@ void handleInput(){
     if(downPressed){confirmIndex=(confirmIndex+1)%3;moved=true;}
     if(choose){
       if(confirmIndex==0){
-        if(connectSaved())serverTest();changeView(View::HOME);return;
+        beginWifiAsync(wifiSsid,wifiPass,false);return;
       }
       if(confirmIndex==1){scanWifi();return;}
       if(confirmIndex==2){changeView(View::DELETE_CONFIRM);return;}
@@ -1454,19 +1499,17 @@ void setup(){
  M5Cardputer.Display.setRotation(1);
  loadSettings();initSd();paint();
  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
- if(connectRememberedWiFi()){
-    if(serverTest()){pollInbox();refreshUnread();}
-  }
-  else if(!storageFault){setStatus("Choisir le Wi-Fi dans le menu");}
+ if(!wifiSsid.isEmpty())beginWifiAsync(wifiSsid,wifiPass,true);
+ else if(!storageFault)setStatus("Choisir le Wi-Fi dans le menu");
  paint();
 }
 void loop(){
  M5Cardputer.update();handleInput();
- serviceWifiScan();flushDraftIfDue();
+ serviceWifiScan();servicePendingWifi();flushDraftIfDue();
  uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
-   if(!wifiScanPending && !wifiSsid.isEmpty()&&now-lastWifiAttempt>20000){lastWifiAttempt=now;WiFi.reconnect();}
+   if(wifiAttempt==WifiAttempt::NONE && !wifiScanPending && !wifiSsid.isEmpty()&&now-lastWifiAttempt>20000){lastWifiAttempt=now;WiFi.reconnect();}
  }else if(now-lastCheck>12000){
    lastCheck=now;
    if(configured()){
