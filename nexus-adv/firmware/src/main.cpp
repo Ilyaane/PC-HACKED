@@ -21,7 +21,8 @@
 #include <freertos/queue.h>
 
 namespace {
-constexpr uint16_t COL_BG=0x0000, COL_PANEL=0x18C3, COL_ACCENT=0x07FF, COL_TEXT=0xFFFF, COL_MUTED=0xAD55, COL_WARN=0xFBE0;
+constexpr uint16_t COL_BG=0x0000, COL_PANEL=0x18C3, COL_ACCENT=0xE81F, COL_TEXT=0xFFFF, COL_MUTED=0xAD55, COL_WARN=0xFD20;
+constexpr uint16_t COL_ACCENT2=0x07FF, COL_LINE=0x3190;
 constexpr int SD_SCK=40, SD_MISO=39, SD_MOSI=14, SD_CS=12;
 constexpr uint32_t AUDIO_RATE=16000;
 constexpr size_t AUDIO_FRAME=1024, AUDIO_FRAMES=48; // 3.072 seconds, 98,348-byte WAV
@@ -102,62 +103,82 @@ void flushDraftIfDue(){
   }
 }
 void setStatus(const String& msg){ statusLine=clipped(msg,60);Serial.println("NEXUS: "+statusLine); }
-void drawLines(const String& title,const String& a="",const String& b="",const String& c="",const String& d="",const String& e=""){
+// NEXUS vector interface: inspired by the compact carousel layout of Bruce,
+// but drawn using original primitives. No bitmap assets or additional libraries.
+void drawStatusBar(const String& title){
   auto& l=M5Cardputer.Display;
-  // First frame or page transition: clear once. Keystrokes repaint only text rows.
-  if(fullRepaint)l.fillScreen(COL_BG);
-  l.fillRect(0,0,240,21,COL_PANEL);
-  l.setTextColor(COL_ACCENT,COL_PANEL);l.setTextSize(1);
-  l.setCursor(7,7);l.print(clipped(title,27));
-  l.setTextColor(WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN,COL_PANEL);
-  l.setCursor(198,7);l.print(WiFi.status()==WL_CONNECTED?"WiFi":"OFF");
-  l.setTextColor(COL_TEXT,COL_BG);
-  const String lines[]={a,b,c,d,e};
-  for(int i=0;i<5;++i){
-    l.fillRect(5,25+i*17,234,15,COL_BG);
-    l.setCursor(7,26+i*17);l.print(clipped(lines[i],37));
-  }
-  l.drawFastHLine(0,114,240,COL_PANEL);
+  l.fillRect(0,0,240,22,COL_PANEL);
+  l.fillRect(0,20,240,2,COL_ACCENT);
+  l.fillRoundRect(5,4,15,14,4,COL_ACCENT);
+  l.setTextSize(1);
+  l.setTextColor(COL_BG,COL_ACCENT);l.setCursor(9,8);l.print("N");
+  l.setTextColor(COL_TEXT,COL_PANEL);l.setCursor(26,8);
+  l.print(clipped(title,22));
+  const bool connected=WiFi.status()==WL_CONNECTED;
+  const uint16_t signalColor=connected?COL_ACCENT2:COL_WARN;
+  l.fillCircle(190,10,3,signalColor);
+  l.drawLine(184,6,190,3,signalColor);l.drawLine(190,3,196,6,signalColor);
+  l.drawLine(186,9,190,7,signalColor);l.drawLine(190,7,194,9,signalColor);
+  l.fillRoundRect(204,5,12,11,2,sdReady?COL_ACCENT2:COL_LINE);
+  l.setTextColor(COL_BG,sdReady?COL_ACCENT2:COL_LINE);
+  l.setCursor(206,7);l.print("S");
+  int level=M5Cardputer.Power.getBatteryLevel();
+  level=constrain(level,0,100);
+  l.drawRect(220,5,16,10,COL_TEXT);
+  l.fillRect(236,8,2,4,COL_TEXT);
+  if(level>0)l.fillRect(222,7,(level*12)/100,6,level<=15?COL_WARN:COL_ACCENT2);
+}
+void drawFooter(const String& hint){
+  auto& l=M5Cardputer.Display;
+  l.drawFastHLine(0,114,240,COL_LINE);
   l.fillRect(0,115,240,20,COL_BG);
-  l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,120);l.print(clipped(statusLine,37));
+  l.setTextSize(1);l.setTextColor(COL_MUTED,COL_BG);
+  l.setCursor(5,119);l.print(clipped(hint,38));
+}
+void drawLines(const String& title,const String& a="",const String& b="",
+               const String& c="",const String& d="",const String& e=""){
+  auto& l=M5Cardputer.Display;
+  if(fullRepaint)l.fillScreen(COL_BG);
+  drawStatusBar(title);
+  l.fillRect(0,22,240,92,COL_BG);
+  const String lines[]={a,b,c,d,e};
+  l.setTextSize(1);
+  for(int i=0;i<5;i++){
+    const int y=26+i*17;
+    if(i%2==0)l.fillRoundRect(4,y-1,232,16,3,COL_PANEL);
+    l.setTextColor(i==0?COL_ACCENT2:COL_TEXT,i%2==0?COL_PANEL:COL_BG);
+    l.setCursor(10,y+4);
+    l.print(clipped(lines[i],36));
+  }
+  drawFooter(statusLine);
 }
 void menuFrame(const String& title){
   auto& l=M5Cardputer.Display;
   if(fullRepaint)l.fillScreen(COL_BG);
-  l.fillRoundRect(2,2,236,20,5,COL_PANEL);
-  l.fillRoundRect(7,6,11,11,3,COL_ACCENT);
-  l.setTextColor(COL_BG,COL_ACCENT);
-  l.setTextSize(1);l.setCursor(9,8);l.print("N");
-  l.setTextColor(COL_TEXT,COL_PANEL);
-  l.setCursor(24,9);l.print(clipped(title,25));
-  l.fillCircle(222,12,3,WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN);
+  drawStatusBar(title);
 }
 void drawMenu(const String& title,const String opts[],int count,int selected,
               const String& hint="; Haut   . Bas   Entree OK"){
-  auto& l=M5Cardputer.Display; menuFrame(title);
-  static int prevStart=-1;
+  auto& l=M5Cardputer.Display;
+  menuFrame(title);
   const int start=(selected/5)*5;
-  // Redraw individual selection rows. Never wipe the list on each keystroke.
-  if(fullRepaint||start!=prevStart)l.fillRect(0,23,240,91,COL_BG);
-  prevStart=start;
+  l.fillRect(0,22,240,92,COL_BG);
   for(int r=0;r<5;r++){
     const int idx=start+r;
     if(idx>=count)break;
-    const int y=26+r*17;
+    const int y=25+r*17;
     if(idx==selected){
       l.fillRoundRect(4,y-1,232,17,5,COL_ACCENT);
-      l.fillTriangle(8,y+3,8,y+11,13,y+7,COL_BG);
+      l.fillTriangle(9,y+4,9,y+12,15,y+8,COL_BG);
       l.setTextColor(COL_BG,COL_ACCENT);
     }else{
       l.fillRoundRect(4,y-1,232,17,5,COL_PANEL);
       l.setTextColor(COL_TEXT,COL_PANEL);
     }
-    l.setTextSize(1);l.setCursor(18,y+4);l.print(clipped(opts[idx],35));
+    l.setTextSize(1);l.setCursor(19,y+4);
+    l.print(clipped(opts[idx],34));
   }
-  l.drawFastHLine(3,114,234,COL_PANEL);
-  l.fillRect(0,115,240,20,COL_BG);
-  l.setTextColor(COL_MUTED,COL_BG);l.setCursor(5,119);l.print(clipped(statusLine,30));
-  l.setCursor(200,119);l.print("; . OK");
+  drawFooter(count>5 ? String(selected+1)+"/"+String(count)+"   "+hint : hint);
 }
 
 String sectionTitle(int section){
@@ -176,64 +197,85 @@ int sectionOptions(int section,String items[]){
 void drawHome(){
   auto& l=M5Cardputer.Display;
   static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME","AUTRES"};
+  static const char* descriptions[]={"Lire et ecrire","Parler et ecouter",
+    "Coder et decoder","Connexion reseau","Reglages et etat","Archives et outils"};
   if(fullRepaint)l.fillScreen(COL_BG);
-  l.fillRect(0,0,240,26,COL_BG);
-  l.fillRect(0,26,240,88,COL_BG);
-  l.fillRoundRect(3,3,234,22,5,COL_PANEL);
-  l.setTextColor(COL_TEXT,COL_PANEL);l.setTextSize(1);l.setCursor(12,11);l.print("NEXUS");
-  l.fillCircle(211,14,4,WiFi.status()==WL_CONNECTED?COL_ACCENT:COL_WARN);
-  l.fillRoundRect(155,5,45,16,4,unreadCount?COL_ACCENT:COL_PANEL);
-  l.setTextSize(1);l.setTextColor(unreadCount?COL_BG:COL_MUTED,unreadCount?COL_ACCENT:COL_PANEL);
-  l.setCursor(160,10);l.print(String(unreadCount>99?"99+":String(unreadCount))+" nouv");
-  const int cx=120,cy=68;
-  l.fillRoundRect(52,30,136,76,12,COL_PANEL);
-  l.drawRoundRect(52,30,136,76,12,COL_ACCENT);
-  // Distinctive vector icons; no borrowed firmware art.
-  if(homeIndex==0){
-    l.fillRoundRect(83,46,58,29,5,COL_TEXT);
-    l.fillTriangle(92,74,98,74,91,82,COL_TEXT);
-    l.fillRoundRect(105,59,49,24,4,COL_ACCENT);
-    l.fillTriangle(142,82,150,82,149,88,COL_ACCENT);
-    l.drawFastHLine(113,66,31,COL_BG);l.drawFastHLine(113,72,25,COL_BG);
-  }else if(homeIndex==1){
-    const int heights[]={13,29,37,20,32,15,26};
-    for(int i=0;i<7;i++)l.fillRoundRect(77+i*14,67-heights[i]/2,8,heights[i],3,i%2?COL_TEXT:COL_ACCENT);
-  }else if(homeIndex==2){
-    l.fillCircle(83,68,7,COL_ACCENT);
-    l.fillRoundRect(96,65,22,6,2,COL_TEXT);
-    l.fillCircle(131,68,7,COL_ACCENT);
-    l.fillRoundRect(143,65,18,6,2,COL_TEXT);
-  }else if(homeIndex==3){
-    l.drawLine(80,59,120,42,COL_TEXT);l.drawLine(120,42,160,59,COL_TEXT);
-    l.drawLine(91,67,120,54,COL_ACCENT);l.drawLine(120,54,149,67,COL_ACCENT);
-    l.drawLine(103,75,120,67,COL_TEXT);l.drawLine(120,67,137,75,COL_TEXT);
-    l.fillCircle(120,83,6,COL_ACCENT);
-  }else if(homeIndex==4){
-    l.drawCircle(120,67,21,COL_TEXT);l.drawCircle(120,67,12,COL_ACCENT);
-    l.fillCircle(120,67,5,COL_TEXT);
-    for(int i=0;i<8;i++){
-      float a=i*3.14159265f/4;
-      l.drawLine(120+23*cosf(a),67+23*sinf(a),120+28*cosf(a),67+28*sinf(a),COL_TEXT);
-    }
-  }
-  else {
-    l.fillRoundRect(92,51,55,37,6,COL_ACCENT);
-    l.setTextColor(COL_BG,COL_ACCENT);l.setTextSize(3);
-    l.setCursor(110,56);l.print("+");
+  drawStatusBar("NEXUS MESSAGERIE");
+  l.fillRect(0,22,240,92,COL_BG);
+  // Main carousel card, six custom vector icons and two clear navigation arrows.
+  l.fillRoundRect(41,26,158,81,12,COL_PANEL);
+  l.drawRoundRect(41,26,158,81,12,COL_LINE);
+  l.fillRoundRect(49,30,142,3,1,COL_ACCENT2);
+  l.fillTriangle(13,65,31,55,31,75,COL_ACCENT);
+  l.fillTriangle(227,65,209,55,209,75,COL_ACCENT);
+  const int x=120,y=61;
+  switch(homeIndex){
+    case 0: // message bubbles
+      l.fillRoundRect(x-29,y-19,51,30,6,COL_TEXT);
+      l.fillTriangle(x-19,y+9,x-13,y+9,x-20,y+18,COL_TEXT);
+      l.fillRoundRect(x-9,y-5,42,25,6,COL_ACCENT2);
+      l.fillTriangle(x+22,y+18,x+29,y+18,x+28,y+25,COL_ACCENT2);
+      l.drawFastHLine(x-1,y+3,23,COL_BG);
+      l.drawFastHLine(x-1,y+9,17,COL_BG);break;
+    case 1: // microphone with small sound waves
+      l.fillRoundRect(x-8,y-23,16,30,8,COL_ACCENT2);
+      l.drawLine(x-17,y-5,x-17,y+7,COL_TEXT);
+      l.drawLine(x+17,y-5,x+17,y+7,COL_TEXT);
+      l.drawFastHLine(x-17,y+10,34,COL_TEXT);
+      l.drawFastVLine(x,y+10,12,COL_TEXT);
+      l.drawFastHLine(x-10,y+22,20,COL_TEXT);
+      l.drawLine(x-17,y+7,x-11,y+13,COL_TEXT);
+      l.drawLine(x+17,y+7,x+11,y+13,COL_TEXT);break;
+    case 2: // dots and dashes (Morse)
+      l.fillCircle(x-28,y-7,7,COL_ACCENT2);
+      l.fillRoundRect(x-10,y-12,36,9,4,COL_TEXT);
+      l.fillCircle(x+33,y-7,6,COL_ACCENT);
+      l.fillRoundRect(x-31,y+9,21,8,4,COL_TEXT);
+      l.fillCircle(x+5,y+13,6,COL_ACCENT2);
+      l.fillRoundRect(x+17,y+9,20,8,4,COL_TEXT);break;
+    case 3: // Wi-Fi
+      l.drawLine(x-37,y-5,x,y-23,COL_ACCENT2);
+      l.drawLine(x,y-23,x+37,y-5,COL_ACCENT2);
+      l.drawLine(x-26,y+2,x,y-11,COL_TEXT);
+      l.drawLine(x,y-11,x+26,y+2,COL_TEXT);
+      l.drawLine(x-13,y+12,x,y+5,COL_ACCENT2);
+      l.drawLine(x,y+5,x+13,y+12,COL_ACCENT2);
+      l.fillCircle(x,y+22,6,COL_ACCENT);break;
+    case 4: // simple settings cog / sliders
+      l.drawCircle(x,y,20,COL_ACCENT2);
+      l.drawCircle(x,y,9,COL_TEXT);
+      l.fillCircle(x,y,4,COL_ACCENT);
+      for(int i=0;i<8;i++){
+        float a=i*3.14159265f/4.0f;
+        l.drawLine(x+23*cosf(a),y+23*sinf(a),
+                   x+29*cosf(a),y+29*sinf(a),COL_TEXT);
+      }break;
+    default: // folder and tools
+      l.fillRoundRect(x-32,y-16,64,42,6,COL_ACCENT2);
+      l.fillRoundRect(x-31,y-22,29,10,3,COL_ACCENT2);
+      l.drawRoundRect(x-24,y-9,48,26,4,COL_BG);
+      l.fillCircle(x-13,y+4,4,COL_BG);
+      l.fillCircle(x,y+4,4,COL_BG);
+      l.fillCircle(x+13,y+4,4,COL_BG);break;
   }
   l.setTextSize(1);l.setTextColor(COL_TEXT,COL_PANEL);
-  l.setCursor(120-(strlen(names[homeIndex])*3),95);l.print(names[homeIndex]);
-  l.fillTriangle(25,65,36,59,36,71,COL_ACCENT);
-  l.fillTriangle(215,65,204,59,204,71,COL_ACCENT);
+  l.setCursor(120-strlen(names[homeIndex])*3,90);
+  l.print(names[homeIndex]);
   l.setTextColor(COL_MUTED,COL_BG);
-  l.setCursor(8,117);
-  if(unreadCount && latestUnreadSender.length())
-    l.print(clipped("Nouveau "+latestUnreadSender+": "+latestUnreadPreview,31));
-  else l.print("< ,     / >       Entree");
-  l.setCursor(197,117);l.print(String(homeIndex+1)+"/"+String(HOME_COUNT));
+  l.setCursor(120-strlen(descriptions[homeIndex])*3,108);
+  l.print(descriptions[homeIndex]);
+  if(unreadCount>0){
+    l.fillRoundRect(153,32,39,15,5,COL_ACCENT);
+    l.setTextColor(COL_BG,COL_ACCENT);
+    l.setCursor(157,36);l.print(String(unreadCount>99?"99+":String(unreadCount))+" nouv");
+  }
+  drawFooter("< ,     / >    Entree : ouvrir");
 }
 
 void paint(){
+ // Batch drawing to avoid visible partial frames and SPI chatter.
+ auto& display=M5Cardputer.Display;
+ display.startWrite();
  static bool firstFrame=true;
  static View lastView=View::HOME;
  fullRepaint=firstFrame || lastView!=view;
@@ -370,11 +412,12 @@ void paint(){
    if(sdReady){const uint64_t t=SD.totalBytes(),u=SD.usedBytes();
      free="Libre: "+String((uint32_t)((t>u?t-u:0)/(1024*1024)))+" Mio";
      total="Total: "+String((uint32_t)(t/(1024*1024)))+" Mio";}
-   drawLines("STOCKAGE ET VERSION","NEXUS v0.9 dev",free,total,
+   drawLines("STOCKAGE ET VERSION","NEXUS STABILITE BETA",free,total,
      "Code conserve en NVS", "OPT : retour");break;}
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
  }
+ display.endWrite();
 }
 void changeView(View v){view=v;paint();}
 bool saveSetting(const char* key, const String& value){
@@ -816,6 +859,7 @@ bool refreshUnread(){
   return applyUnreadPayload(payload);
 }
 void applyInboxPayload(const String& payload){
+  const uint32_t oldCursor=cursor, oldVoiceId=lastVoiceId;
   JsonDocument doc;
   if(deserializeJson(doc,payload)){setStatus("Reponse invalide");return;}
   JsonArray messages=doc["messages"].as<JsonArray>();
@@ -840,11 +884,20 @@ void applyInboxPayload(const String& payload){
       setStatus("microSD: historique non sauvegarde");
       break; // Do not advance persistent cursor and silently lose a message.
     }
-    if(kind=="voice"){lastVoiceId=id;prefs.putUInt("voice",id);}
+    if(kind=="voice")lastVoiceId=id;
     cursor=id;
     // Without microSD, keep cursor volatile: missed items are replayed on reboot.
-    if(sdReady) prefs.putUInt("cursor",cursor);
     setStatus("Nouveau message de "+sender);
+  }
+  // Persist only once after the batch to reduce NVS wear and FULL errors.
+  if(sdReady && prefsReady && cursor!=oldCursor){
+    if(prefs.putUInt("cursor",cursor)!=sizeof(uint32_t)){
+      storageFault=true;setStatus("NVS pleine: curseur non sauvegarde");
+    }
+  }
+  if(prefsReady && lastVoiceId!=oldVoiceId){
+    if(prefs.putUInt("voice",lastVoiceId)!=sizeof(uint32_t))
+      storageFault=true;
   }
 }
 void pollInbox(){
@@ -912,7 +965,8 @@ void serviceNetworkReplies(){
   delete reply;
 }
 void scheduleNetworkPoll(){
-  if(netWorkerBusy || !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
+  if(netWorkerBusy || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
+     !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
   if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
   NetRequest* request=new NetRequest();
   if(!request){setStatus("RAM insuffisante");return;}
