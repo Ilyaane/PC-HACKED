@@ -14,7 +14,6 @@
 #include <SPI.h>
 #include <SD.h>
 #include "ca_roots.h"
-#include "nexus_morse.h"
 #include <math.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -61,17 +60,14 @@ int batteryVoltageSmooth=-1;
 int batteryLevelSmooth=-1;
 uint32_t batterySampleAt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
 bool scanSaved[24]={}, scanOpen[24]={};
 uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
-constexpr uint8_t HOME_COUNT=6, CONFIG_COUNT=4, WIFI_SLOTS=5;
-uint8_t sectionIndex=0, morseMode=0;
-uint8_t morseWpm=12; char morseQuizLetter='A'; bool morseQuizAnswered=false;
-String morseQuizAnswer;
-String morseOutput;
+constexpr uint8_t HOME_COUNT=5, CONFIG_COUNT=4, WIFI_SLOTS=5;
+uint8_t sectionIndex=0;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
 uint8_t textPage=0, voiceSelection=0, voiceCount=0;
 constexpr uint8_t SEARCH_MAX=24;
@@ -182,23 +178,22 @@ void drawMenu(const String& title,const String opts[],int count,int selected,
 }
 
 String sectionTitle(int section){
-  static const char* names[]={"MESSAGES","VOCAL","MORSE","WI-FI","SYSTEME","AUTRES"};
-  return String(names[constrain(section,0,5)]);
+  static const char* names[]={"MESSAGES","VOCAL","WI-FI","SYSTEME","AUTRES"};
+  return String(names[constrain(section,0,4)]);
 }
 int sectionOptions(int section,String items[]){
   if(section==0){items[0]="Boite de reception";items[1]="Nouveau message";items[2]="Messages envoyes";return 3;}
   if(section==1){items[0]="Enregistrer un vocal";items[1]="Envoyer le vocal";items[2]="Archives microSD";
     items[3]="Ecouter dernier vocal";items[4]="Effacer brouillon vocal";return 5;}
-  if(section==2){items[0]="Ecrire en Morse";items[1]="Jouer le Morse (son)";items[2]="Decoder son (beta)";items[3]="Entrainement auditif";items[4]="Vitesse : "+String(morseWpm)+" MPM";return 5;}
-  if(section==3){items[0]="Gerer les reseaux Wi-Fi";items[1]="Etat reseau";return 2;}
-  if(section==4){items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]=String("Son notification : ")+(notificationSound?"ON":"OFF");items[3]="Detecter la microSD";return 4;}
+  if(section==2){items[0]="Gerer les reseaux Wi-Fi";items[1]="Etat reseau";return 2;}
+  if(section==3){items[0]="Parametres NEXUS";items[1]="Diagnostics";items[2]=String("Son notification : ")+(notificationSound?"ON":"OFF");items[3]="Detecter la microSD";return 4;}
   items[0]="Rechercher dans textes";items[1]="Batterie : tension et %";items[2]="Espace sur microSD";items[3]="A propos de NEXUS";return 4;
 }
 void drawHome(){
   auto& l=M5Cardputer.Display;
-  static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME","AUTRES"};
+  static const char* names[]={"MESSAGES","VOCAUX","WI-FI","SYSTEME","AUTRES"};
   static const char* descriptions[]={"Lire et ecrire","Parler et ecouter",
-    "Coder et decoder","Connexion reseau","Reglages et etat","Archives et outils"};
+    "Connexion reseau","Reglages et etat","Archives et outils"};
   if(fullRepaint)l.fillScreen(COL_BG);
   drawStatusBar("NEXUS MESSAGERIE");
   l.fillRect(0,22,240,92,COL_BG);
@@ -226,14 +221,7 @@ void drawHome(){
       l.drawFastHLine(x-10,y+22,20,COL_TEXT);
       l.drawLine(x-17,y+7,x-11,y+13,COL_TEXT);
       l.drawLine(x+17,y+7,x+11,y+13,COL_TEXT);break;
-    case 2: // dots and dashes (Morse)
-      l.fillCircle(x-28,y-7,7,COL_ACCENT2);
-      l.fillRoundRect(x-10,y-12,36,9,4,COL_TEXT);
-      l.fillCircle(x+33,y-7,6,COL_ACCENT);
-      l.fillRoundRect(x-31,y+9,21,8,4,COL_TEXT);
-      l.fillCircle(x+5,y+13,6,COL_ACCENT2);
-      l.fillRoundRect(x+17,y+9,20,8,4,COL_TEXT);break;
-    case 3: // Wi-Fi
+    case 2: // Wi-Fi
       l.drawLine(x-37,y-5,x,y-23,COL_ACCENT2);
       l.drawLine(x,y-23,x+37,y-5,COL_ACCENT2);
       l.drawLine(x-26,y+2,x,y-11,COL_TEXT);
@@ -241,7 +229,7 @@ void drawHome(){
       l.drawLine(x-13,y+12,x,y+5,COL_ACCENT2);
       l.drawLine(x,y+5,x+13,y+12,COL_ACCENT2);
       l.fillCircle(x,y+22,6,COL_ACCENT);break;
-    case 4: // simple settings cog / sliders
+    case 3: // simple settings cog / sliders
       l.drawCircle(x,y,20,COL_ACCENT2);
       l.drawCircle(x,y,9,COL_TEXT);
       l.fillCircle(x,y,4,COL_ACCENT);
@@ -286,25 +274,6 @@ void paint(){
    String items[6];int count=sectionOptions(homeIndex,items);
    drawMenu(sectionTitle(homeIndex),items,count,sectionIndex);
    break;}
- case View::MORSE_EDIT: {
-   String tail=input.length()>90?input.substring(input.length()-90):input;
-   drawLines(morseMode==0?"MORSE VERS TEXTE":"MORSE EN AUDIO",
-     "Tape du texte et valide",
-     tail.substring(0,30),
-     tail.length()>30?tail.substring(30,60):"",
-     tail.length()>60?tail.substring(60):"",
-     "Entree: convertir  OPT: retour");break;}
- case View::MORSE_TRAIN:drawLines("MORSE : ENTRAINEMENT",
-     "Ecoute et tape la lettre",morseQuizAnswered?("Reponse: "+String(morseQuizLetter)):("A toi: "+morseQuizAnswer),
-     "Vitesse: "+String(morseWpm)+" MPM",morseQuizAnswered?"Entree: nouveau test":"Entree: verifier", "OPT: retour");break;
- case View::MORSE_RESULT: {
-   String shown=morseOutput.length()>120?morseOutput.substring(morseOutput.length()-120):morseOutput;
-   drawLines("RESULTAT MORSE",
-     shown.substring(0,30),
-     shown.length()>30?shown.substring(30,60):"",
-     shown.length()>60?shown.substring(60,90):"",
-     shown.length()>90?shown.substring(90):"",
-     "OPT: retour");break;}
  case View::VOICE_ARCHIVE: {
    if(!sdReady){drawLines("ARCHIVES VOCALES","Inserer une microSD"," puis detecter microSD","OPT: retour");break;}
    if(!voiceCount){drawLines("ARCHIVES VOCALES","Aucun vocal archive","Les vocaux recus sont","sauvegardes automatiquement","OPT: retour");break;}
@@ -469,7 +438,6 @@ void loadSettings(){
   unreadCount=prefs.getUInt("unread",0);unreadSynced=false;
   notificationSound=prefs.getBool("beep",true);
   notifiedMessageId=prefs.getUInt("notified",0u);
-  morseWpm=(uint8_t)constrain((int)prefs.getUInt("morsewpm",12u),5,30);
   pendingTextId=prefs.getString("txtid",""); pendingVoiceId=prefs.getString("vocid","");
   cursor=prefs.getUInt("cursor",0);lastVoiceId=prefs.getUInt("voice",0);
 }
@@ -1190,89 +1158,6 @@ void playArchiveWav(const String& path){
   f.close();M5Cardputer.Speaker.end();
   setStatus(ok?"Lecture archive terminee":"Erreur lecture microSD");paint();
 }
-void playMorseAudio(const String& encoded){
-  if(encoded.isEmpty()){setStatus("Texte non compatible Morse");return;}
-  M5Cardputer.Mic.end();M5Cardputer.Speaker.setVolume(75);
-  if(!M5Cardputer.Speaker.begin()){setStatus("Haut-parleur indisponible");return;}
-  const uint32_t unit=1200u/morseWpm; // standard PARIS timing, one dit = 1200/WPM ms
-  bool aborted=false;
-  for(size_t i=0;i<encoded.length();i++){
-    const char c=encoded[i];
-    if(c=='.' || c=='-'){
-      const uint32_t duration=(c=='.'?unit:3*unit);
-      if(!M5Cardputer.Speaker.tone(880,duration)){aborted=true;break;}
-      delay(duration+15);
-      M5Cardputer.Speaker.stop();delay(unit);
-    }else if(c=='/'){delay(4*unit);}
-    else if(c==' '){delay(2*unit);}
-    M5Cardputer.update();
-    if(M5Cardputer.Keyboard.keysState().opt){aborted=true;break;}
-  }
-  M5Cardputer.Speaker.end();
-  setStatus(aborted?"Morse arrete":"Lecture Morse terminee");
-}
-void decodeMorseMicrophone(){
-  // Experimental clean-tone decoder: 880 Hz bursts with approx. 120ms dots.
-  // It does not attempt full-band speech recognition or decode arbitrary radios.
-  M5Cardputer.Speaker.end();
-  if(!M5Cardputer.Mic.begin()){
-    morseOutput="Micro indisponible";changeView(View::MORSE_RESULT);return;
-  }
-  delay(900);
-  constexpr int chunk=256, chunks=320;
-  static float energy[chunks];
-  int16_t samples[chunk];
-  morseOutput="";setStatus("Ecoute Morse (environ 5 secondes)");paint();
-  float maxEnergy=0;
-  const float coeff=2*cosf(2*3.141592653589793f*880/AUDIO_RATE);
-  bool good=true;int n=0;
-  for(int k=0;k<chunks;k++){
-    if(!M5Cardputer.Mic.record(samples,chunk,AUDIO_RATE,false)){good=false;break;}
-    uint32_t t=millis();
-    while(M5Cardputer.Mic.isRecording() && millis()-t<700)delay(1);
-    if(M5Cardputer.Mic.isRecording()){good=false;break;}
-    // Goertzel band energy around an 880Hz reference tone.
-    float s0=0,s1=0,s2=0;
-    for(int i=0;i<chunk;i++){
-      s0=samples[i]/32768.0f+coeff*s1-s2;
-      s2=s1;s1=s0;
-    }
-    const float power=s1*s1+s2*s2-coeff*s1*s2;
-    energy[n++]=power;
-    if(power>maxEnergy)maxEnergy=power;
-  }
-  M5Cardputer.Mic.end();
-  if(!good || n<60 || maxEnergy<0.4f){
-    morseOutput="Signal faible ou micro indisponible";changeView(View::MORSE_RESULT);return;
-  }
-  // Consecutive 16ms windows are classified against peak energy.
-  const float threshold=maxEnergy*0.21f;
-  String pattern,output;bool previous=false;int length=0;
-  bool started=false;
-  for(int i=0;i<=n;i++){
-    const bool on=i<n && energy[i]>threshold;
-    if(i==0){previous=on;length=1;continue;}
-    if(i<n && on==previous){length++;continue;}
-    const uint32_t ms=(uint32_t)length*16;
-    if(previous){
-      if(ms>=56){pattern+=ms<220?".":"-";started=true;}
-    }else if(started){
-      if(ms>=760){
-        if(pattern.length()){output+=NexusMorse::decodeSymbol(pattern);pattern="";}
-        if(output.length()&&!output.endsWith(" "))output+=" ";
-      }else if(ms>=280){
-        if(pattern.length()){output+=NexusMorse::decodeSymbol(pattern);pattern="";}
-      }
-    }
-    previous=on;length=1;
-  }
-  if(pattern.length())output+=NexusMorse::decodeSymbol(pattern);
-  output.trim();
-  morseOutput=output.length()?output:"Aucun Morse reconnu";
-  setStatus("Decodage beta: tone 880Hz, bruit faible");
-  changeView(View::MORSE_RESULT);
-}
-
 void measureBattery(){
   // Cardputer ADV: voltage and voltage-derived percentage, not precision state-of-charge.
   int values[7],n=0;
@@ -1368,22 +1253,9 @@ void openSectionSelection(){
       case 4:changeView(View::DISCARD_VOICE);break;
     }
   }else if(homeIndex==2){
-    if(sectionIndex==2){decodeMorseMicrophone();}
-    else if(sectionIndex==3){
-      morseQuizLetter=(char)('A'+(esp_random()%26));
-      morseQuizAnswered=false;morseQuizAnswer="";
-      changeView(View::MORSE_TRAIN);
-      playMorseAudio(NexusMorse::encode(String(morseQuizLetter)));
-      paint();
-    }else if(sectionIndex==4){
-      morseWpm=(uint8_t)(morseWpm>=30?5:morseWpm+1);
-      prefs.putUInt("morsewpm",morseWpm);
-      setStatus("Morse: "+String(morseWpm)+" mots/min");paint();
-    }else{morseMode=sectionIndex;input="";changeView(View::MORSE_EDIT);}
-  }else if(homeIndex==3){
     if(sectionIndex==0)wifiSetup();
     else changeView(View::DIAG);
-  }else if(homeIndex==4){
+  }else if(homeIndex==3){
     switch(sectionIndex){
       case 0:configIndex=0;changeView(View::CONFIG);break;
       case 1:changeView(View::DIAG);break;
@@ -1422,7 +1294,7 @@ void handleInput(){
   lastChord=chord;
   const bool editing=(view==View::WIFI_PASSWORD || view==View::EDIT_URL ||
     view==View::EDIT_TOKEN || view==View::EDIT_PEER || view==View::COMPOSE ||
-    view==View::MORSE_EDIT || view==View::SEARCH_EDIT);
+    view==View::SEARCH_EDIT);
   // Comma and slash must remain typeable in text, URLs and Wi-Fi passwords.
   if(escPressed || (leftPressed && !editing && view!=View::HISTORY && view!=View::HOME && view!=View::SEARCH_VIEW)){
     if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST || view==View::WIFI_CONFIRM){
@@ -1432,8 +1304,7 @@ void handleInput(){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
     else if(view==View::SEARCH_VIEW)changeView(View::SEARCH_RESULTS);
-    else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN ||
-            view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO || view==View::BATTERY_INFO ||
+    else if(view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO || view==View::BATTERY_INFO ||
             view==View::SEARCH_EDIT || view==View::SEARCH_RESULTS)changeView(View::SECTION);
     else if(view==View::SECTION)changeView(View::HOME);
     else{changeView(View::SECTION);}
@@ -1454,20 +1325,6 @@ void handleInput(){
     if(downPressed){sectionIndex=(sectionIndex+1)%count;moved=true;}
     if(choose){openSectionSelection();return;}
     if(moved)paint();return;
-  }
-  if(view==View::MORSE_TRAIN){
-    if(morseQuizAnswered){
-      if(k.enter){morseQuizLetter=(char)('A'+(esp_random()%26));
-        morseQuizAnswered=false;morseQuizAnswer="";
-        playMorseAudio(NexusMorse::encode(String(morseQuizLetter)));paint();}
-    }else{
-      if(k.del&&morseQuizAnswer.length())morseQuizAnswer.remove(morseQuizAnswer.length()-1);
-      for(char ch:k.word)if(isalpha((unsigned char)ch)&&morseQuizAnswer.length()<1)morseQuizAnswer+=String((char)toupper((unsigned char)ch));
-      if(k.enter){morseQuizAnswered=true;
-        setStatus(morseQuizAnswer==String(morseQuizLetter)?"Bonne reponse !":"Essaye encore / nouvelle lettre");}
-      paint();
-    }
-    return;
   }
   if(view==View::VOICE_ARCHIVE){
     if(voiceCount){
@@ -1554,7 +1411,7 @@ void handleInput(){
     return;
   }
   if(view==View::WIFI_PASSWORD||view==View::EDIT_URL||view==View::EDIT_TOKEN||
-     view==View::EDIT_PEER||view==View::COMPOSE||view==View::MORSE_EDIT||view==View::SEARCH_EDIT){
+     view==View::EDIT_PEER||view==View::COMPOSE||view==View::SEARCH_EDIT){
     // Fn chords do not type punctuation into passwords or drafts.
     if(k.fn){return;}
     String& target=view==View::COMPOSE?editor:input;
@@ -1562,7 +1419,7 @@ void handleInput(){
     if(erase)target.remove(target.length()-1);
     bool edited=erase;
     for(char ch:k.word){
-      if(ch>=32&&ch<=126&&target.length()<(view==View::COMPOSE?600u:view==View::MORSE_EDIT?70u:view==View::SEARCH_EDIT?48u:160u)){
+      if(ch>=32&&ch<=126&&target.length()<(view==View::COMPOSE?600u:view==View::SEARCH_EDIT?48u:160u)){
         target+=ch;edited=true;
       }
     }
@@ -1572,13 +1429,6 @@ void handleInput(){
     }
     if(k.enter){
       if(view==View::SEARCH_EDIT){searchTextArchive();return;}
-      if(view==View::MORSE_EDIT){
-        morseOutput=NexusMorse::encode(input);
-        if(morseOutput.isEmpty())morseOutput="Aucun caractere pris en charge";
-        if(morseMode==1 && morseOutput!="Aucun caractere pris en charge")
-          playMorseAudio(morseOutput);
-        changeView(View::MORSE_RESULT);return;
-      }
       if(view==View::WIFI_PASSWORD){storeWiFiAfterTest(input);input="";return;}
       if(view==View::EDIT_URL){
         input.trim();
