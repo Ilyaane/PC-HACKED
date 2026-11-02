@@ -36,6 +36,8 @@ String wifiSsid, wifiPass, serverUrl, deviceToken, recipient="bob", editor, stat
 String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
+uint32_t pendingReadId=0, draftChangedAt=0;
+bool draftDirty=false, wifiScanPending=false;
 uint32_t unreadCount=0, latestUnreadId=0;
 String latestUnreadPreview, latestUnreadSender;
 bool unreadSynced=false;
@@ -73,7 +75,19 @@ uint8_t historySize=0;
 
 String masked(size_t count){String s;for(size_t i=0;i<count && i<40;i++)s+='*';return s;}
 String clipped(String s,size_t max){if(s.length()>max)return s.substring(0,max-2)+"..";return s;}
-void persistDraft(){ prefs.putString("draft",editor); }
+void setStatus(const String& msg); // defined immediately below
+// Debounce draft writes: one NVS write after a pause, not one per key.
+void persistDraft(){draftDirty=true;draftChangedAt=millis();}
+void flushDraftIfDue(){
+  if(!draftDirty || !prefsReady || millis()-draftChangedAt<1300)return;
+  if(prefs.putString("draft",editor)>0 && prefs.getString("draft","")==editor)
+    draftDirty=false;
+  else {
+    storageFault=true;
+    setStatus("Brouillon non sauvegarde : NVS pleine");
+    draftChangedAt=millis();
+  }
+}
 void setStatus(const String& msg){ statusLine=clipped(msg,60);Serial.println("NEXUS: "+statusLine); }
 void drawLines(const String& title,const String& a="",const String& b="",const String& c="",const String& d="",const String& e=""){
   auto& l=M5Cardputer.Display;
@@ -810,7 +824,7 @@ void sendText(){
         saved=archiveText(id,from,(uint32_t)time(nullptr),editor,true);
       }
     }
-    editor="";prefs.putString("draft","");
+    editor="";draftDirty=false;prefs.putString("draft","");
     pendingTextId="";prefs.remove("txtid");
     setStatus(saved?"Texte envoye":"Envoye / archive texte microSD KO");
     changeView(View::HOME);
@@ -1134,8 +1148,10 @@ void openArchiveText(){
 void openSectionSelection(){
   if(homeIndex==0){
     switch(sectionIndex){
-      case 0:pageHistory=0;textPage=0;pollInbox();changeView(View::HISTORY);
-        if(historySize)acknowledgeMessage(history[historySize-1].id);break;
+      case 0:pageHistory=0;textPage=0;changeView(View::HISTORY);
+        // Show cached messages instantly; defer server acknowledgement.
+        if(historySize)pendingReadId=history[historySize-1].id;
+        break;
       case 1:changeView(View::COMPOSE);break;
       case 2:changeView(View::SENT);refreshSent();break;
     }
@@ -1401,7 +1417,7 @@ void handleInput(){
       }
       if(choose&&history[i].kind=="voice"){lastVoiceId=history[i].id;playVoice();}
     }
-    if(changed&&historySize)acknowledgeMessage(history[historySize-1-pageHistory].id);
+    if(changed&&historySize)pendingReadId=history[historySize-1-pageHistory].id;
     if(changed||leftPressed||rightPressed)paint();return;
   }
   if(view==View::SENT){if(choose)refreshSent();return;}
@@ -1421,6 +1437,7 @@ void setup(){
 }
 void loop(){
  M5Cardputer.update();handleInput();
+ flushDraftIfDue();
  uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
@@ -1431,12 +1448,13 @@ void loop(){
      if(!serverReady)serverTest();
      if(serverReady){
        pollInbox();refreshUnread();
+       if(pendingReadId){const uint32_t id=pendingReadId;pendingReadId=0;acknowledgeMessage(id);}
        // A send explicitly attempted earlier may be retried once online.
        // The original client id prevents duplicate delivery on lost responses.
        if(pendingTextId.length() && !editor.isEmpty())sendText();
      }
    }
-   if(view==View::DIAG||view==View::HOME)paint();
+   if(view==View::DIAG)paint(); // HOME only redraws on actual changes
  }
  delay(15);
 }
