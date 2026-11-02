@@ -38,6 +38,7 @@ String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 uint32_t pendingReadId=0, draftChangedAt=0;
 bool draftDirty=false, wifiScanPending=false;
+uint32_t wifiScanStartedAt=0;
 uint32_t unreadCount=0, latestUnreadId=0;
 String latestUnreadPreview, latestUnreadSender;
 bool unreadSynced=false;
@@ -265,7 +266,7 @@ void paint(){
    const String opts[]={"Connecter : "+clipped(wifiSsid,23),"Choisir un autre Wi-Fi","Oublier ce reseau"};
    drawMenu("WI-FI MEMORISE",opts,3,confirmIndex);break;}
  case View::WIFI_LIST: {
-   if(scanCount==0){drawLines("RESEAUX WI-FI","Aucun reseau trouve","Fn+ESC : retour");break;}
+   if(scanCount==0){drawLines("RESEAUX WI-FI",wifiScanPending?"Recherche en cours...":"Aucun reseau trouve","Fn+ESC : retour");break;}
    String opts[24];
    for(int i=0;i<scanCount;i++)
      opts[i]=String(scanSaved[i]?"[MEM] ":scanOpen[i]?"[LIB] ":"[WPA] ")+clipped(scanNames[i],28);
@@ -519,8 +520,30 @@ bool serverTest(){
   return serverReady;
 }
 void scanWifi(){
-  changeView(View::WIFI_LIST);setStatus("Recherche Wi-Fi...");paint();
-  int n=WiFi.scanNetworks(false,true);scanCount=0;scanPage=0;wifiIndex=0;
+  scanCount=0;scanPage=0;wifiIndex=0;
+  changeView(View::WIFI_LIST);
+  setStatus("Recherche Wi-Fi...");paint();
+  // Asynchronous scan: never wait for scan results in the keyboard/UI call.
+  WiFi.scanDelete();
+  wifiScanPending=true;wifiScanStartedAt=millis();
+  int started=WiFi.scanNetworks(true,true);
+  if(started==WIFI_SCAN_FAILED){
+    wifiScanPending=false;
+    setStatus("Scan indisponible, reessayer");paint();
+  }
+}
+void serviceWifiScan(){
+  if(!wifiScanPending)return;
+  int n=WiFi.scanComplete();
+  if(n==WIFI_SCAN_RUNNING){
+    if(millis()-wifiScanStartedAt>12000){
+      wifiScanPending=false;WiFi.scanDelete();
+      setStatus("Scan expire: reessayer");paint();
+    }
+    return;
+  }
+  wifiScanPending=false;
+  if(n<0){WiFi.scanDelete();setStatus("Scan echoue: reessayer");paint();return;}
   for(int i=0;i<n && scanCount<24;i++){
     String name=WiFi.SSID(i);if(name.isEmpty())continue;
     bool duplicate=false;for(int j=0;j<scanCount;j++)if(scanNames[j]==name)duplicate=true;
@@ -1326,6 +1349,8 @@ void handleInput(){
   }
   if(view==View::WIFI_LIST){
     bool moved=false;
+    // Enter on an empty/failed scan retries discovery.
+    if(!wifiScanPending && !scanCount && k.enter){scanWifi();return;}
     if(scanCount){
       if(upPressed){wifiIndex=(wifiIndex+scanCount-1)%scanCount;moved=true;}
       if(downPressed){wifiIndex=(wifiIndex+1)%scanCount;moved=true;}
@@ -1437,11 +1462,11 @@ void setup(){
 }
 void loop(){
  M5Cardputer.update();handleInput();
- flushDraftIfDue();
+ serviceWifiScan();flushDraftIfDue();
  uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
-   if(!wifiSsid.isEmpty()&&now-lastWifiAttempt>20000){lastWifiAttempt=now;WiFi.reconnect();}
+   if(!wifiScanPending && !wifiSsid.isEmpty()&&now-lastWifiAttempt>20000){lastWifiAttempt=now;WiFi.reconnect();}
  }else if(now-lastCheck>12000){
    lastCheck=now;
    if(configured()){
