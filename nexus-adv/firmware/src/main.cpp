@@ -412,7 +412,7 @@ void paint(){
    if(sdReady){const uint64_t t=SD.totalBytes(),u=SD.usedBytes();
      free="Libre: "+String((uint32_t)((t>u?t-u:0)/(1024*1024)))+" Mio";
      total="Total: "+String((uint32_t)(t/(1024*1024)))+" Mio";}
-   drawLines("STOCKAGE ET VERSION","NEXUS v0.9 dev",free,total,
+   drawLines("STOCKAGE ET VERSION","NEXUS STABILITE BETA",free,total,
      "Code conserve en NVS", "OPT : retour");break;}
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
@@ -859,6 +859,7 @@ bool refreshUnread(){
   return applyUnreadPayload(payload);
 }
 void applyInboxPayload(const String& payload){
+  const uint32_t oldCursor=cursor, oldVoiceId=lastVoiceId;
   JsonDocument doc;
   if(deserializeJson(doc,payload)){setStatus("Reponse invalide");return;}
   JsonArray messages=doc["messages"].as<JsonArray>();
@@ -883,11 +884,20 @@ void applyInboxPayload(const String& payload){
       setStatus("microSD: historique non sauvegarde");
       break; // Do not advance persistent cursor and silently lose a message.
     }
-    if(kind=="voice"){lastVoiceId=id;prefs.putUInt("voice",id);}
+    if(kind=="voice")lastVoiceId=id;
     cursor=id;
     // Without microSD, keep cursor volatile: missed items are replayed on reboot.
-    if(sdReady) prefs.putUInt("cursor",cursor);
     setStatus("Nouveau message de "+sender);
+  }
+  // Persist only once after the batch to reduce NVS wear and FULL errors.
+  if(sdReady && prefsReady && cursor!=oldCursor){
+    if(prefs.putUInt("cursor",cursor)!=sizeof(uint32_t)){
+      storageFault=true;setStatus("NVS pleine: curseur non sauvegarde");
+    }
+  }
+  if(prefsReady && lastVoiceId!=oldVoiceId){
+    if(prefs.putUInt("voice",lastVoiceId)!=sizeof(uint32_t))
+      storageFault=true;
   }
 }
 void pollInbox(){
@@ -955,7 +965,8 @@ void serviceNetworkReplies(){
   delete reply;
 }
 void scheduleNetworkPoll(){
-  if(netWorkerBusy || !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
+  if(netWorkerBusy || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
+     !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
   if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
   NetRequest* request=new NetRequest();
   if(!request){setStatus("RAM insuffisante");return;}
