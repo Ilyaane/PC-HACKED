@@ -16,6 +16,9 @@
 #include "ca_roots.h"
 #include "nexus_morse.h"
 #include <math.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
 
 namespace {
 constexpr uint16_t COL_BG=0x0000, COL_PANEL=0x18C3, COL_ACCENT=0x07FF, COL_TEXT=0xFFFF, COL_MUTED=0xAD55, COL_WARN=0xFBE0;
@@ -36,6 +39,18 @@ String wifiSsid, wifiPass, serverUrl, deviceToken, recipient="bob", editor, stat
 String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
+uint32_t pendingReadId=0, draftChangedAt=0;
+bool draftDirty=false, wifiScanPending=false;
+uint32_t wifiScanStartedAt=0, wifiAttemptStartedAt=0;
+struct NetRequest { String url,token,recipient; uint32_t cursor,readId; };
+struct NetReply { int sessionCode=-1,inboxCode=-1,unreadCode=-1,readCode=-1;
+ String session,inbox,unread; uint32_t readId=0; };
+QueueHandle_t netReplyQueue=nullptr;
+bool netWorkerBusy=false;
+enum class WifiAttempt { NONE, BOOT, USER };
+WifiAttempt wifiAttempt=WifiAttempt::NONE;
+int bootWifiSlot=0;
+String wifiAttemptSsid, wifiAttemptPass, wifiPreviousSsid, wifiPreviousPass;
 uint32_t unreadCount=0, latestUnreadId=0;
 String latestUnreadPreview, latestUnreadSender;
 bool unreadSynced=false;
@@ -73,7 +88,19 @@ uint8_t historySize=0;
 
 String masked(size_t count){String s;for(size_t i=0;i<count && i<40;i++)s+='*';return s;}
 String clipped(String s,size_t max){if(s.length()>max)return s.substring(0,max-2)+"..";return s;}
-void persistDraft(){ prefs.putString("draft",editor); }
+void setStatus(const String& msg); // defined immediately below
+// Debounce draft writes: one NVS write after a pause, not one per key.
+void persistDraft(){draftDirty=true;draftChangedAt=millis();}
+void flushDraftIfDue(){
+  if(!draftDirty || !prefsReady || millis()-draftChangedAt<1300)return;
+  if(prefs.putString("draft",editor)>0 && prefs.getString("draft","")==editor)
+    draftDirty=false;
+  else {
+    storageFault=true;
+    setStatus("Brouillon non sauvegarde : NVS pleine");
+    draftChangedAt=millis();
+  }
+}
 void setStatus(const String& msg){ statusLine=clipped(msg,60);Serial.println("NEXUS: "+statusLine); }
 void drawLines(const String& title,const String& a="",const String& b="",const String& c="",const String& d="",const String& e=""){
   auto& l=M5Cardputer.Display;
@@ -251,7 +278,7 @@ void paint(){
    const String opts[]={"Connecter : "+clipped(wifiSsid,23),"Choisir un autre Wi-Fi","Oublier ce reseau"};
    drawMenu("WI-FI MEMORISE",opts,3,confirmIndex);break;}
  case View::WIFI_LIST: {
-   if(scanCount==0){drawLines("RESEAUX WI-FI","Aucun reseau trouve","Fn+ESC : retour");break;}
+   if(scanCount==0){drawLines("RESEAUX WI-FI",wifiScanPending?"Recherche en cours...":"Aucun reseau trouve","Fn+ESC : retour");break;}
    String opts[24];
    for(int i=0;i<scanCount;i++)
      opts[i]=String(scanSaved[i]?"[MEM] ":scanOpen[i]?"[LIB] ":"[WPA] ")+clipped(scanNames[i],28);
@@ -504,9 +531,88 @@ bool serverTest(){
   setStatus(serverReady?"Serveur NEXUS OK":("Serveur inaccessible: "+String(code)));
   return serverReady;
 }
+// Async Wi-Fi state machine: keyboard processing never waits for association.
+void beginWifiAsync(const String& ssid,const String& pass,bool boot){
+  if(ssid.isEmpty())return;
+  if(wifiScanPending){wifiScanPending=false;WiFi.scanDelete();}
+  wifiPreviousSsid=prefsReady?prefs.getString("ssid",""):wifiSsid;
+  wifiPreviousPass=prefsReady?prefs.getString("pwd",""):wifiPass;
+  wifiAttemptSsid=ssid;wifiAttemptPass=pass;
+  wifiAttempt=boot?WifiAttempt::BOOT:WifiAttempt::USER;
+  wifiAttemptStartedAt=millis();
+  if(WiFi.status()!=WL_CONNECTED || WiFi.SSID()!=ssid){
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect(false,false);
+    WiFi.begin(ssid.c_str(),pass.c_str());
+  }
+  setStatus("Connexion Wi-Fi en cours, clavier actif");
+}
+void servicePendingWifi(){
+  if(wifiAttempt==WifiAttempt::NONE)return;
+  if(WiFi.status()==WL_CONNECTED && WiFi.SSID()==wifiAttemptSsid){
+    const bool boot=wifiAttempt==WifiAttempt::BOOT;
+    wifiAttempt=WifiAttempt::NONE;
+    wifiSsid=wifiAttemptSsid;wifiPass=wifiAttemptPass;netReady=true;serverReady=false;
+    const bool changed=wifiSsid!=wifiPreviousSsid;
+    if(!boot || changed){
+      const bool ok=saveSetting("pwd",wifiPass) &&
+        saveSetting("ssid",wifiSsid) && rememberNetwork(wifiSsid,wifiPass);
+      setStatus(ok?"Wi-Fi memorise, interface active":"Wi-Fi OK / sauvegarde NVS impossible");
+    }else setStatus("Wi-Fi connecte, interface active");
+    lastCheck=millis(); // allow loop to run before a background server poll
+    if(!boot && (view==View::WIFI_LIST || view==View::WIFI_PASSWORD || view==View::WIFI_CONFIRM))
+      changeView(View::HOME);
+    else if(view==View::DIAG || view==View::HOME)paint();
+    return;
+  }
+  if(millis()-wifiAttemptStartedAt<9000)return;
+  if(wifiAttempt==WifiAttempt::BOOT){
+    while(prefsReady && bootWifiSlot<WIFI_SLOTS){
+      const int slot=bootWifiSlot++;
+      const String ssid=prefs.getString(wifiKey(slot,'s').c_str(),"");
+      if(ssid.isEmpty() || ssid==wifiPreviousSsid)continue;
+      const String pass=prefs.getString(wifiKey(slot,'p').c_str(),"");
+      beginWifiAsync(ssid,pass,true);return;
+    }
+    wifiAttempt=WifiAttempt::NONE;
+    wifiSsid=wifiPreviousSsid;wifiPass=wifiPreviousPass;
+    setStatus("Wi-Fi absent: clavier et menus disponibles");
+    return;
+  }
+  wifiAttempt=WifiAttempt::NONE;
+  wifiSsid=wifiPreviousSsid;wifiPass=wifiPreviousPass;
+  if(!wifiSsid.isEmpty())WiFi.begin(wifiSsid.c_str(),wifiPass.c_str());
+  setStatus("Echec de connexion; ancien Wi-Fi conserve");
+  if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST)
+    changeView(wifiSsid.isEmpty()?View::WIFI_LIST:View::WIFI_CONFIRM);
+}
 void scanWifi(){
-  changeView(View::WIFI_LIST);setStatus("Recherche Wi-Fi...");paint();
-  int n=WiFi.scanNetworks(false,true);scanCount=0;scanPage=0;wifiIndex=0;
+  // Let the user explicitly switch to discovery even during auto-reconnect.
+  wifiAttempt=WifiAttempt::NONE;
+  scanCount=0;scanPage=0;wifiIndex=0;
+  changeView(View::WIFI_LIST);
+  setStatus("Recherche Wi-Fi...");paint();
+  // Asynchronous scan: never wait for scan results in the keyboard/UI call.
+  WiFi.scanDelete();
+  wifiScanPending=true;wifiScanStartedAt=millis();
+  int started=WiFi.scanNetworks(true,true);
+  if(started==WIFI_SCAN_FAILED){
+    wifiScanPending=false;
+    setStatus("Scan indisponible, reessayer");paint();
+  }
+}
+void serviceWifiScan(){
+  if(!wifiScanPending)return;
+  int n=WiFi.scanComplete();
+  if(n==WIFI_SCAN_RUNNING){
+    if(millis()-wifiScanStartedAt>12000){
+      wifiScanPending=false;WiFi.scanDelete();
+      setStatus("Scan expire: reessayer");paint();
+    }
+    return;
+  }
+  wifiScanPending=false;
+  if(n<0){WiFi.scanDelete();setStatus("Scan echoue: reessayer");paint();return;}
   for(int i=0;i<n && scanCount<24;i++){
     String name=WiFi.SSID(i);if(name.isEmpty())continue;
     bool duplicate=false;for(int j=0;j<scanCount;j++)if(scanNames[j]==name)duplicate=true;
@@ -530,25 +636,9 @@ void chooseWiFi(int selected){
   input="";changeView(View::WIFI_PASSWORD);
 }
 void storeWiFiAfterTest(const String& newPass){
-  String ssid=wifiSsid,pass=newPass;
-  const String oldSsid=prefs.getString("ssid","");
-  const String oldPass=prefs.getString("pwd","");
-  wifiPass=pass;
-  if(connectSaved()){
-    const bool saved=saveSetting("pwd",pass) && saveSetting("ssid",ssid) && rememberNetwork(ssid,pass);
-    if(!saved){
-      setStatus("Wi-Fi connecte, ENREGISTREMENT NVS KO");
-      changeView(View::HOME);return;
-    }
-    const bool hasServer=serverTest();
-    setStatus(hasServer ? "Wi-Fi et serveur OK" : "Wi-Fi OK / serveur indisponible");
-    changeView(View::HOME);
-  }else{
-    wifiSsid=oldSsid;wifiPass=oldPass;
-    if(!oldSsid.isEmpty()){WiFi.disconnect();WiFi.begin(oldSsid.c_str(),oldPass.c_str());}
-    setStatus("Echec: ancien reseau conserve");
-    if(oldSsid.isEmpty())scanWifi();else changeView(View::WIFI_CONFIRM);
-  }
+  // Do not call connectSaved/serverTest here: both block the keyboard.
+  beginWifiAsync(wifiSsid,newPass,false);
+  changeView(View::WIFI_LIST);
 }
 
 
@@ -690,13 +780,7 @@ bool archiveText(uint32_t id,const String& from,uint32_t created,
   return true;
 }
 
-bool refreshUnread(){
-  if(!configured() || WiFi.status()!=WL_CONNECTED)return false;
-  WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/unread"))return false;
-  const int code=http.GET();const String payload=code==200?http.getString():"";
-  http.end();
-  if(code!=200)return false; // Old server still supports other features.
+bool applyUnreadPayload(const String& payload){
   JsonDocument doc;if(deserializeJson(doc,payload))return false;
   const uint32_t n=doc["unread"]|0u;
   const uint32_t id=doc["latest"]["id"]|0u;
@@ -722,13 +806,16 @@ bool refreshUnread(){
   if(changed && (view==View::HOME || view==View::SECTION))paint();
   return true;
 }
-
-void pollInbox(){
-  if(!configured()||WiFi.status()!=WL_CONNECTED)return;
+bool refreshUnread(){
+  if(!configured() || WiFi.status()!=WL_CONNECTED)return false;
   WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/messages?after="+String(cursor)))return;
-  int code=http.GET();if(code!=200){http.end();setStatus("Reception HTTP "+String(code));serverReady=false;return;}
-  String payload=http.getString();http.end();
+  if(!openHttp(http,client,"/unread"))return false;
+  const int code=http.GET();const String payload=code==200?http.getString():"";
+  http.end();
+  if(code!=200)return false; // Old server still supports other features.
+  return applyUnreadPayload(payload);
+}
+void applyInboxPayload(const String& payload){
   JsonDocument doc;
   if(deserializeJson(doc,payload)){setStatus("Reponse invalide");return;}
   JsonArray messages=doc["messages"].as<JsonArray>();
@@ -758,6 +845,83 @@ void pollInbox(){
     // Without microSD, keep cursor volatile: missed items are replayed on reboot.
     if(sdReady) prefs.putUInt("cursor",cursor);
     setStatus("Nouveau message de "+sender);
+  }
+}
+void pollInbox(){
+  if(!configured()||WiFi.status()!=WL_CONNECTED)return;
+  WiFiClientSecure client;HTTPClient http;
+  if(!openHttp(http,client,"/messages?after="+String(cursor)))return;
+  int code=http.GET();if(code!=200){http.end();setStatus("Reception HTTP "+String(code));serverReady=false;return;}
+  String payload=http.getString();http.end();
+  applyInboxPayload(payload);
+}
+// No HTTPS request runs in the UI loop. The worker owns network objects
+// and passes immutable completed responses back to the UI through a queue.
+void nexusNetworkWorker(void* argument){
+  NetRequest* request=static_cast<NetRequest*>(argument);
+  NetReply* reply=new NetReply();
+  if(!reply){delete request;vTaskDelete(nullptr);return;}
+  reply->readId=request->readId;
+  if(WiFi.status()==WL_CONNECTED && request->url.startsWith("https://")){
+    if(time(nullptr)<1700000000){
+      configTime(0,0,"pool.ntp.org","time.google.com");
+      for(int i=0;i<40 && time(nullptr)<1700000000;i++)vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    auto networkCall=[&](const String& path,int& status,String* content,bool post=false){
+      WiFiClientSecure client;HTTPClient http;
+      client.setCACert(NEXUS_TRUSTED_ROOTS);
+      client.setTimeout(4500);
+      http.setConnectTimeout(3500);http.setTimeout(4500);
+      if(!http.begin(client,request->url+path)){status=-1;return;}
+      http.addHeader("Authorization","Bearer "+request->token);
+      http.addHeader("X-Nexus-User",request->recipient=="bob"?"alice":"bob");
+      status=post?http.POST((uint8_t*)nullptr,0):http.GET();
+      if(content && status==200 && http.getSize()<=16384)
+        *content=http.getString();
+      http.end();
+    };
+    networkCall("/session",reply->sessionCode,&reply->session);
+    if(reply->sessionCode==200){
+      networkCall("/messages?after="+String(request->cursor),reply->inboxCode,&reply->inbox);
+      networkCall("/unread",reply->unreadCode,&reply->unread);
+      if(request->readId)
+        networkCall("/messages/"+String(request->readId)+"/read",reply->readCode,nullptr,true);
+    }
+  }
+  delete request;
+  if(!netReplyQueue || xQueueSend(netReplyQueue,&reply,0)!=pdTRUE)delete reply;
+  vTaskDelete(nullptr);
+}
+void serviceNetworkReplies(){
+  if(!netReplyQueue)return;
+  NetReply* reply=nullptr;
+  if(xQueueReceive(netReplyQueue,&reply,0)!=pdTRUE)return;
+  netWorkerBusy=false;
+  if(!reply)return;
+  JsonDocument session;
+  const String expected=recipient=="bob"?"alice":"bob";
+  serverReady=reply->sessionCode==200 && !deserializeJson(session,reply->session)
+    && session["ok"]==true && session["user"]==expected;
+  if(serverReady){
+    if(reply->inboxCode==200 && reply->inbox.length())applyInboxPayload(reply->inbox);
+    if(reply->unreadCode==200 && reply->unread.length())applyUnreadPayload(reply->unread);
+    if(reply->readId && reply->readCode==200 && pendingReadId==reply->readId)
+      pendingReadId=0;
+  } else setStatus("Serveur indisponible; menus accessibles");
+  if(view==View::DIAG)paint();
+  delete reply;
+}
+void scheduleNetworkPoll(){
+  if(netWorkerBusy || !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
+  if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
+  NetRequest* request=new NetRequest();
+  if(!request){setStatus("RAM insuffisante");return;}
+  request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
+  request->cursor=cursor;request->readId=pendingReadId;
+  netWorkerBusy=true;
+  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_https",12288,request,1,nullptr,0)!=pdPASS){
+    netWorkerBusy=false;delete request;
+    setStatus("Tache HTTPS non disponible");
   }
 }
 void refreshSent(){
@@ -810,7 +974,7 @@ void sendText(){
         saved=archiveText(id,from,(uint32_t)time(nullptr),editor,true);
       }
     }
-    editor="";prefs.putString("draft","");
+    editor="";draftDirty=false;prefs.putString("draft","");
     pendingTextId="";prefs.remove("txtid");
     setStatus(saved?"Texte envoye":"Envoye / archive texte microSD KO");
     changeView(View::HOME);
@@ -1134,8 +1298,10 @@ void openArchiveText(){
 void openSectionSelection(){
   if(homeIndex==0){
     switch(sectionIndex){
-      case 0:pageHistory=0;textPage=0;pollInbox();changeView(View::HISTORY);
-        if(historySize)acknowledgeMessage(history[historySize-1].id);break;
+      case 0:pageHistory=0;textPage=0;changeView(View::HISTORY);
+        // Show cached messages instantly; defer server acknowledgement.
+        if(historySize)pendingReadId=history[historySize-1].id;
+        break;
       case 1:changeView(View::COMPOSE);break;
       case 2:changeView(View::SENT);refreshSent();break;
     }
@@ -1301,7 +1467,7 @@ void handleInput(){
     if(downPressed){confirmIndex=(confirmIndex+1)%3;moved=true;}
     if(choose){
       if(confirmIndex==0){
-        if(connectSaved())serverTest();changeView(View::HOME);return;
+        beginWifiAsync(wifiSsid,wifiPass,false);return;
       }
       if(confirmIndex==1){scanWifi();return;}
       if(confirmIndex==2){changeView(View::DELETE_CONFIRM);return;}
@@ -1310,6 +1476,8 @@ void handleInput(){
   }
   if(view==View::WIFI_LIST){
     bool moved=false;
+    // Enter on an empty/failed scan retries discovery.
+    if(!wifiScanPending && !scanCount && k.enter){scanWifi();return;}
     if(scanCount){
       if(upPressed){wifiIndex=(wifiIndex+scanCount-1)%scanCount;moved=true;}
       if(downPressed){wifiIndex=(wifiIndex+1)%scanCount;moved=true;}
@@ -1401,7 +1569,7 @@ void handleInput(){
       }
       if(choose&&history[i].kind=="voice"){lastVoiceId=history[i].id;playVoice();}
     }
-    if(changed&&historySize)acknowledgeMessage(history[historySize-1-pageHistory].id);
+    if(changed&&historySize)pendingReadId=history[historySize-1-pageHistory].id;
     if(changed||leftPressed||rightPressed)paint();return;
   }
   if(view==View::SENT){if(choose)refreshSent();return;}
@@ -1412,31 +1580,27 @@ void setup(){
  Serial.begin(115200);auto cfg=M5.config();M5Cardputer.begin(cfg,true);
  M5Cardputer.Display.setRotation(1);
  loadSettings();initSd();paint();
+ netReplyQueue=xQueueCreate(1,sizeof(NetReply*));
  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
- if(connectRememberedWiFi()){
-    if(serverTest()){pollInbox();refreshUnread();}
-  }
-  else if(!storageFault){setStatus("Choisir le Wi-Fi dans le menu");}
+ if(!wifiSsid.isEmpty())beginWifiAsync(wifiSsid,wifiPass,true);
+ else if(!storageFault)setStatus("Choisir le Wi-Fi dans le menu");
  paint();
 }
 void loop(){
  M5Cardputer.update();handleInput();
- uint32_t now=millis();
+ serviceWifiScan();servicePendingWifi();flushDraftIfDue();
+ serviceNetworkReplies();
+ const uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
-   if(!wifiSsid.isEmpty()&&now-lastWifiAttempt>20000){lastWifiAttempt=now;WiFi.reconnect();}
+   if(wifiAttempt==WifiAttempt::NONE && !wifiScanPending && !netWorkerBusy &&
+      !wifiSsid.isEmpty() && now-lastWifiAttempt>20000){
+     lastWifiAttempt=now;WiFi.reconnect();
+   }
  }else if(now-lastCheck>12000){
    lastCheck=now;
-   if(configured()){
-     if(!serverReady)serverTest();
-     if(serverReady){
-       pollInbox();refreshUnread();
-       // A send explicitly attempted earlier may be retried once online.
-       // The original client id prevents duplicate delivery on lost responses.
-       if(pendingTextId.length() && !editor.isEmpty())sendText();
-     }
-   }
-   if(view==View::DIAG||view==View::HOME)paint();
+   // Queue HTTPS on a separate FreeRTOS task; the keyboard always keeps running.
+   scheduleNetworkPoll();
  }
- delay(15);
+ delay(10);
 }
