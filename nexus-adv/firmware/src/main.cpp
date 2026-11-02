@@ -273,6 +273,9 @@ void drawHome(){
 }
 
 void paint(){
+ // Batch drawing to avoid visible partial frames and SPI chatter.
+ auto& display=M5Cardputer.Display;
+ display.startWrite();
  static bool firstFrame=true;
  static View lastView=View::HOME;
  fullRepaint=firstFrame || lastView!=view;
@@ -414,6 +417,7 @@ void paint(){
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
  }
+ display.endWrite();
 }
 void changeView(View v){view=v;paint();}
 bool saveSetting(const char* key, const String& value){
