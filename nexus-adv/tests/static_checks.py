@@ -33,7 +33,7 @@ checks={
  'Do not poll while WiFi scan': 'netWorkerBusy || wifiScanPending' in cpp,
 
  'Section-based navigation': 'void openSectionSelection()' in cpp and 'case View::SECTION:' in cpp,
- 'Morse code library': (root/'firmware/include/nexus_morse.h').exists(),
+ 'Morse removed completely': 'NexusMorse' not in cpp and 'View::MORSE' not in cpp and '#include "nexus_morse.h"' not in cpp,
  'Voice archive path and index': 'VOICE_ROOT' in cpp and 'saveVoiceArchive(' in cpp and 'VOICE_INDEX' in cpp,
  'Unread server summary': "pathname==='/unread'" in worker and 'refreshUnread()' in cpp,
  'Background inbox sync': 'xTaskCreatePinnedToCore(nexusNetworkWorker' in cpp and 'applyInboxPayload(reply->inbox)' in cpp,
@@ -41,7 +41,7 @@ checks={
  'Text archived by date and ID': 'archiveText(' in cpp and 'TEXT_ROOT' in cpp and 'voiceTime(created)' in cpp,
  'Sent text also archived': 'saved=archiveText(id,from,(uint32_t)time(nullptr),editor,true)' in cpp,
  '24 recent offline messages': 'HISTORY_CAP=24' in cpp and 'loadHistory()' in cpp,
- 'Six horizontal home categories': 'HOME_COUNT=6' in cpp and '"AUTRES"' in cpp,
+ 'Five horizontal home categories': 'HOME_COUNT=5' in cpp and '"AUTRES"' in cpp and '"MORSE"' not in cpp,
 
  'Notification toggle in System': 'Son notification : ' in cpp and 'prefs.putBool("beep",notificationSound)' in cpp,
  'Notification persisted': 'notificationSound=prefs.getBool("beep",true)' in cpp,
