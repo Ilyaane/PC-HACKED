@@ -16,6 +16,9 @@
 #include "ca_roots.h"
 #include "nexus_morse.h"
 #include <math.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/queue.h>
 
 namespace {
 constexpr uint16_t COL_BG=0x0000, COL_PANEL=0x18C3, COL_ACCENT=0x07FF, COL_TEXT=0xFFFF, COL_MUTED=0xAD55, COL_WARN=0xFBE0;
@@ -39,6 +42,11 @@ uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 uint32_t pendingReadId=0, draftChangedAt=0;
 bool draftDirty=false, wifiScanPending=false;
 uint32_t wifiScanStartedAt=0, wifiAttemptStartedAt=0;
+struct NetRequest { String url,token,recipient; uint32_t cursor,readId; };
+struct NetReply { int sessionCode=-1,inboxCode=-1,unreadCode=-1,readCode=-1;
+ String session,inbox,unread; uint32_t readId=0; };
+QueueHandle_t netReplyQueue=nullptr;
+bool netWorkerBusy=false;
 enum class WifiAttempt { NONE, BOOT, USER };
 WifiAttempt wifiAttempt=WifiAttempt::NONE;
 int bootWifiSlot=0;
@@ -772,13 +780,7 @@ bool archiveText(uint32_t id,const String& from,uint32_t created,
   return true;
 }
 
-bool refreshUnread(){
-  if(!configured() || WiFi.status()!=WL_CONNECTED)return false;
-  WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/unread"))return false;
-  const int code=http.GET();const String payload=code==200?http.getString():"";
-  http.end();
-  if(code!=200)return false; // Old server still supports other features.
+bool applyUnreadPayload(const String& payload){
   JsonDocument doc;if(deserializeJson(doc,payload))return false;
   const uint32_t n=doc["unread"]|0u;
   const uint32_t id=doc["latest"]["id"]|0u;
@@ -804,13 +806,16 @@ bool refreshUnread(){
   if(changed && (view==View::HOME || view==View::SECTION))paint();
   return true;
 }
-
-void pollInbox(){
-  if(!configured()||WiFi.status()!=WL_CONNECTED)return;
+bool refreshUnread(){
+  if(!configured() || WiFi.status()!=WL_CONNECTED)return false;
   WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/messages?after="+String(cursor)))return;
-  int code=http.GET();if(code!=200){http.end();setStatus("Reception HTTP "+String(code));serverReady=false;return;}
-  String payload=http.getString();http.end();
+  if(!openHttp(http,client,"/unread"))return false;
+  const int code=http.GET();const String payload=code==200?http.getString():"";
+  http.end();
+  if(code!=200)return false; // Old server still supports other features.
+  return applyUnreadPayload(payload);
+}
+void applyInboxPayload(const String& payload){
   JsonDocument doc;
   if(deserializeJson(doc,payload)){setStatus("Reponse invalide");return;}
   JsonArray messages=doc["messages"].as<JsonArray>();
@@ -840,6 +845,83 @@ void pollInbox(){
     // Without microSD, keep cursor volatile: missed items are replayed on reboot.
     if(sdReady) prefs.putUInt("cursor",cursor);
     setStatus("Nouveau message de "+sender);
+  }
+}
+void pollInbox(){
+  if(!configured()||WiFi.status()!=WL_CONNECTED)return;
+  WiFiClientSecure client;HTTPClient http;
+  if(!openHttp(http,client,"/messages?after="+String(cursor)))return;
+  int code=http.GET();if(code!=200){http.end();setStatus("Reception HTTP "+String(code));serverReady=false;return;}
+  String payload=http.getString();http.end();
+  applyInboxPayload(payload);
+}
+// No HTTPS request runs in the UI loop. The worker owns network objects
+// and passes immutable completed responses back to the UI through a queue.
+void nexusNetworkWorker(void* argument){
+  NetRequest* request=static_cast<NetRequest*>(argument);
+  NetReply* reply=new NetReply();
+  if(!reply){delete request;vTaskDelete(nullptr);return;}
+  reply->readId=request->readId;
+  if(WiFi.status()==WL_CONNECTED && request->url.startsWith("https://")){
+    if(time(nullptr)<1700000000){
+      configTime(0,0,"pool.ntp.org","time.google.com");
+      for(int i=0;i<40 && time(nullptr)<1700000000;i++)vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    auto networkCall=[&](const String& path,int& status,String* content,bool post=false){
+      WiFiClientSecure client;HTTPClient http;
+      client.setCACert(NEXUS_TRUSTED_ROOTS);
+      client.setTimeout(4500);
+      http.setConnectTimeout(3500);http.setTimeout(4500);
+      if(!http.begin(client,request->url+path)){status=-1;return;}
+      http.addHeader("Authorization","Bearer "+request->token);
+      http.addHeader("X-Nexus-User",request->recipient=="bob"?"alice":"bob");
+      status=post?http.POST((uint8_t*)nullptr,0):http.GET();
+      if(content && status==200 && http.getSize()<=16384)
+        *content=http.getString();
+      http.end();
+    };
+    networkCall("/session",reply->sessionCode,&reply->session);
+    if(reply->sessionCode==200){
+      networkCall("/messages?after="+String(request->cursor),reply->inboxCode,&reply->inbox);
+      networkCall("/unread",reply->unreadCode,&reply->unread);
+      if(request->readId)
+        networkCall("/messages/"+String(request->readId)+"/read",reply->readCode,nullptr,true);
+    }
+  }
+  delete request;
+  if(!netReplyQueue || xQueueSend(netReplyQueue,&reply,0)!=pdTRUE)delete reply;
+  vTaskDelete(nullptr);
+}
+void serviceNetworkReplies(){
+  if(!netReplyQueue)return;
+  NetReply* reply=nullptr;
+  if(xQueueReceive(netReplyQueue,&reply,0)!=pdTRUE)return;
+  netWorkerBusy=false;
+  if(!reply)return;
+  JsonDocument session;
+  const String expected=recipient=="bob"?"alice":"bob";
+  serverReady=reply->sessionCode==200 && !deserializeJson(session,reply->session)
+    && session["ok"]==true && session["user"]==expected;
+  if(serverReady){
+    if(reply->inboxCode==200 && reply->inbox.length())applyInboxPayload(reply->inbox);
+    if(reply->unreadCode==200 && reply->unread.length())applyUnreadPayload(reply->unread);
+    if(reply->readId && reply->readCode==200 && pendingReadId==reply->readId)
+      pendingReadId=0;
+  } else setStatus("Serveur indisponible; menus accessibles");
+  if(view==View::DIAG)paint();
+  delete reply;
+}
+void scheduleNetworkPoll(){
+  if(netWorkerBusy || !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
+  if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
+  NetRequest* request=new NetRequest();
+  if(!request){setStatus("RAM insuffisante");return;}
+  request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
+  request->cursor=cursor;request->readId=pendingReadId;
+  netWorkerBusy=true;
+  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_https",12288,request,1,nullptr,0)!=pdPASS){
+    netWorkerBusy=false;delete request;
+    setStatus("Tache HTTPS non disponible");
   }
 }
 void refreshSent(){
@@ -1498,6 +1580,7 @@ void setup(){
  Serial.begin(115200);auto cfg=M5.config();M5Cardputer.begin(cfg,true);
  M5Cardputer.Display.setRotation(1);
  loadSettings();initSd();paint();
+ netReplyQueue=xQueueCreate(1,sizeof(NetReply*));
  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
  if(!wifiSsid.isEmpty())beginWifiAsync(wifiSsid,wifiPass,true);
  else if(!storageFault)setStatus("Choisir le Wi-Fi dans le menu");
@@ -1506,23 +1589,18 @@ void setup(){
 void loop(){
  M5Cardputer.update();handleInput();
  serviceWifiScan();servicePendingWifi();flushDraftIfDue();
- uint32_t now=millis();
+ serviceNetworkReplies();
+ const uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
-   if(wifiAttempt==WifiAttempt::NONE && !wifiScanPending && !wifiSsid.isEmpty()&&now-lastWifiAttempt>20000){lastWifiAttempt=now;WiFi.reconnect();}
+   if(wifiAttempt==WifiAttempt::NONE && !wifiScanPending && !netWorkerBusy &&
+      !wifiSsid.isEmpty() && now-lastWifiAttempt>20000){
+     lastWifiAttempt=now;WiFi.reconnect();
+   }
  }else if(now-lastCheck>12000){
    lastCheck=now;
-   if(configured()){
-     if(!serverReady)serverTest();
-     if(serverReady){
-       pollInbox();refreshUnread();
-       if(pendingReadId){const uint32_t id=pendingReadId;pendingReadId=0;acknowledgeMessage(id);}
-       // A send explicitly attempted earlier may be retried once online.
-       // The original client id prevents duplicate delivery on lost responses.
-       if(pendingTextId.length() && !editor.isEmpty())sendText();
-     }
-   }
-   if(view==View::DIAG)paint(); // HOME only redraws on actual changes
+   // Queue HTTPS on a separate FreeRTOS task; the keyboard always keeps running.
+   scheduleNetworkPoll();
  }
- delay(15);
+ delay(10);
 }
