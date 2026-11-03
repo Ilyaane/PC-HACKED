@@ -25,7 +25,7 @@ checks={
  'Diagnostics show role, IP, RAM, Wi-Fi and NVS': 'Role: ' in cpp and 'NVS: ' in cpp and 'WiFi.localIP().toString()' in cpp and 'ESP.getFreeHeap()' in cpp,
 
  'Horizontal icon home': 'void drawHome()' in cpp and 'case View::HOME:drawHome()' in cpp,
- 'Unified visual status bar': 'void drawStatusBar(' in cpp and 'drawStatusBar("NEXUS ADV")' in cpp,
+ 'Unified visual status bar': 'void drawStatusBar(' in cpp and 'drawStatusBar("NEXUS NEON")' in cpp,
  'Battery WiFi SD icon status': 'M5Cardputer.Power.getBatteryLevel()' in cpp and 'sdReady?p.shine' in cpp,
  'Original lightweight vector icons': 'switch(homeIndex)' in cpp and 'l.fillTriangle' in cpp and 'pushImage(' not in cpp,
  'Low tear graphics batch': 'display.startWrite();' in cpp and 'display.endWrite();' in cpp,
