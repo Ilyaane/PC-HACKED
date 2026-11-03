@@ -174,11 +174,16 @@ void drawFooter(const String& text){
 void drawLines(const String& title,const String& a="",const String& b="",
                const String& c="",const String& d="",const String& e=""){
   auto& l=M5Cardputer.Display;const auto p=palette();
-  drawBackdrop();drawStatusBar(title);
+  static View previousView=View::HOME;
+  static String previousTitle;
+  const bool newFrame=fullRepaint || previousView!=view || previousTitle!=title;
+  if(newFrame){drawBackdrop();drawStatusBar(title);}
+  previousView=view;previousTitle=title;
   const String lines[]={a,b,c,d,e};
   for(int i=0;i<5;i++){
     const int y=25+i*17;
     const uint16_t fill=(i%2)?colorMix(p.dark,0x0000,130):colorMix(p.mid,0x0000,125);
+    // Rows cover the previous glyphs; avoid clearing the whole display per key.
     l.fillRoundRect(6,y,228,16,4,fill);
     if(i==0)l.fillRect(7,y+3,2,10,p.primary);
     l.setTextSize(1);l.setTextColor(i==0?p.shine:0xFFFF,fill);
@@ -190,19 +195,27 @@ void menuFrame(const String& title){drawBackdrop();drawStatusBar(title);}
 void drawMenu(const String& title,const String opts[],int count,int selected,
               const String& hint="; Haut   . Bas   Entree OK"){
   auto& l=M5Cardputer.Display;const auto p=palette();
-  menuFrame(title);const int start=(selected/5)*5;
+  static View lastMenuView=View::HOME;
+  static String lastMenuTitle;
+  static int lastPage=-1,lastSelected=-1,lastCount=-1;
+  const int start=(selected/5)*5;
+  const bool newPage=fullRepaint || lastMenuView!=view || lastMenuTitle!=title
+                   || lastPage!=start || lastCount!=count;
+  if(newPage)menuFrame(title);
   for(int row=0;row<5;row++){
     const int idx=start+row;if(idx>=count)break;
+    // Only the old and new selected items change on a key press.
+    if(!newPage && idx!=selected && idx!=lastSelected)continue;
     const int y=26+17*row;const bool active=idx==selected;
     const uint16_t fill=active?p.primary:colorMix(p.mid,0x0000,115);
     l.fillRoundRect(5,y-1,230,17,5,fill);
-    if(active){
-      l.drawRoundRect(5,y-1,230,17,5,p.shine);
-      l.fillTriangle(10,y+4,10,y+12,17,y+8,0x0000);
-    }else l.fillCircle(13,y+8,2,p.shine);
+    l.drawRoundRect(5,y-1,230,17,5,active?p.shine:fill);
+    if(active)l.fillTriangle(10,y+4,10,y+12,17,y+8,0x0000);
+    else l.fillCircle(13,y+8,2,p.shine);
     l.setTextSize(1);l.setTextColor(active?0x0000:0xFFFF,fill);
     l.setCursor(23,y+4);l.print(clipped(opts[idx],32));
   }
+  lastMenuView=view;lastMenuTitle=title;lastPage=start;lastSelected=selected;lastCount=count;
   drawFooter((count>5?String(selected+1)+"/"+String(count)+" ":"")+hint);
 }
 
