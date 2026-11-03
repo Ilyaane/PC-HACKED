@@ -27,7 +27,7 @@ constexpr int SD_SCK=40, SD_MISO=39, SD_MOSI=14, SD_CS=12;
 constexpr uint32_t AUDIO_RATE=16000;
 constexpr size_t AUDIO_FRAME=1024, AUDIO_FRAMES=48; // 3.072 seconds, 98,348-byte WAV
 constexpr size_t MAX_VOICE=120000;
-constexpr char TX_AUDIO[]="/nexus_tx.wav", RX_AUDIO[]="/nexus_rx.wav", TMP_RX[]="/nexus_rx.tmp", RX_BACKUP[]="/nexus_rx.bak";
+constexpr char TX_AUDIO[]="/nexus_tx.wav", NEW_TX_AUDIO[]="/nexus_tx.new", OLD_TX_AUDIO[]="/nexus_tx.bak", RX_AUDIO[]="/nexus_rx.wav", TMP_RX[]="/nexus_rx.tmp", RX_BACKUP[]="/nexus_rx.bak";
 constexpr char HISTORY[]="/nexus_history.txt";
 constexpr char VOICE_ROOT[]="/NEXUS/MESSAGES_VOCAUX";
 constexpr char VOICE_INDEX[]="/NEXUS/MESSAGES_VOCAUX/INDEX.txt";
@@ -43,11 +43,22 @@ uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 uint32_t pendingReadId=0, draftChangedAt=0;
 bool draftDirty=false, wifiScanPending=false;
 uint32_t wifiScanStartedAt=0, wifiAttemptStartedAt=0;
-struct NetRequest { String url,token,recipient; uint32_t cursor,readId; };
-struct NetReply { int sessionCode=-1,inboxCode=-1,unreadCode=-1,readCode=-1;
- String session,inbox,unread; uint32_t readId=0; };
+struct NetRequest {
+ enum class Kind { POLL, SEND_TEXT, SEND_VOICE, OUTBOX };
+ Kind kind=Kind::POLL;
+ String url,token,recipient,payload,text,clientId;
+ uint32_t cursor=0,readId=0;
+};
+struct NetReply {
+ NetRequest::Kind kind=NetRequest::Kind::POLL;
+ int sessionCode=-1,inboxCode=-1,unreadCode=-1,readCode=-1,sendCode=-1,outboxCode=-1;
+ String session,inbox,unread,sendResponse,clientId,sentText,recipient,outboxPayload;
+ uint32_t readId=0;
+};
 QueueHandle_t netReplyQueue=nullptr;
-bool netWorkerBusy=false;
+bool netWorkerBusy=false,textSendQueued=false,textSending=false,voiceUploadQueued=false,voiceUploadBusy=false,outboxQueued=false;
+bool voiceRecordQueued=false,voiceRecordReplace=false;
+String outgoingText,outgoingRecipient,outgoingId;
 enum class WifiAttempt { NONE, BOOT, USER };
 WifiAttempt wifiAttempt=WifiAttempt::NONE;
 int bootWifiSlot=0;
@@ -61,7 +72,7 @@ int batteryVoltageSmooth=-1;
 int batteryLevelSmooth=-1;
 uint32_t batterySampleAt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, VOICE_READY, VOICE_RECORDING, VOICE_ERROR, VOICE_UPLOADING, VOICE_RESULT, SEND_CONFIRM, SEND_PROGRESS, SEND_RESULT, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
@@ -73,7 +84,8 @@ uint8_t morseWpm=12; char morseQuizLetter='A'; bool morseQuizAnswered=false;
 String morseQuizAnswer;
 String morseOutput;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
-uint8_t textPage=0, voiceSelection=0, voiceCount=0;
+uint8_t textPage=0, voiceSelection=0, voiceCount=0, voiceChoice=0;
+uint32_t voiceRecordedSamples=0;
 constexpr uint8_t SEARCH_MAX=24;
 String searchPaths[SEARCH_MAX];
 uint8_t searchSize=0,searchSelection=0,searchPage=0;
@@ -103,82 +115,109 @@ void flushDraftIfDue(){
   }
 }
 void setStatus(const String& msg){ statusLine=clipped(msg,60);Serial.println("NEXUS: "+statusLine); }
-// NEXUS vector interface: inspired by the compact carousel layout of Bruce,
-// but drawn using original primitives. No bitmap assets or additional libraries.
-void drawStatusBar(const String& title){
-  auto& l=M5Cardputer.Display;
-  l.fillRect(0,0,240,22,COL_PANEL);
-  l.fillRect(0,20,240,2,COL_ACCENT);
-  l.fillRoundRect(5,4,15,14,4,COL_ACCENT);
-  l.setTextSize(1);
-  l.setTextColor(COL_BG,COL_ACCENT);l.setCursor(9,8);l.print("N");
-  l.setTextColor(COL_TEXT,COL_PANEL);l.setCursor(26,8);
-  l.print(clipped(title,22));
-  const bool connected=WiFi.status()==WL_CONNECTED;
-  const uint16_t signalColor=connected?COL_ACCENT2:COL_WARN;
-  l.fillCircle(190,10,3,signalColor);
-  l.drawLine(184,6,190,3,signalColor);l.drawLine(190,3,196,6,signalColor);
-  l.drawLine(186,9,190,7,signalColor);l.drawLine(190,7,194,9,signalColor);
-  l.fillRoundRect(204,5,12,11,2,sdReady?COL_ACCENT2:COL_LINE);
-  l.setTextColor(COL_BG,sdReady?COL_ACCENT2:COL_LINE);
-  l.setCursor(206,7);l.print("S");
-  int level=M5Cardputer.Power.getBatteryLevel();
-  level=constrain(level,0,100);
-  l.drawRect(220,5,16,10,COL_TEXT);
-  l.fillRect(236,8,2,4,COL_TEXT);
-  if(level>0)l.fillRect(222,7,(level*12)/100,6,level<=15?COL_WARN:COL_ACCENT2);
+// NEXUS Neon UI: original lightweight vector art with Bruce-like navigation.
+// Drawn from primitives; no copied icons, bitmap assets, or extra dependencies.
+struct UiPalette {uint16_t dark,mid,primary,shine;};
+UiPalette palette(){
+  static const UiPalette colors[]={
+    {0x080C,0x11C8,0x05FF,0x7DFF}, // Messages: blue / cyan
+    {0x2004,0x49A7,0xFB2D,0xFDE9}, // Voice: warm coral
+    {0x180A,0x492B,0xC31F,0xEBBF}, // Morse: neon violet
+    {0x0026,0x1169,0x07FF,0x7DFF}, // Wi-Fi: blue / teal
+    {0x0805,0x1287,0x3FEA,0xB7FB}, // System: green
+    {0x2080,0x51E0,0xFF20,0xFFCF}  // Tools: gold
+  };
+  return colors[homeIndex<HOME_COUNT?homeIndex:0];
 }
-void drawFooter(const String& hint){
-  auto& l=M5Cardputer.Display;
-  l.drawFastHLine(0,114,240,COL_LINE);
-  l.fillRect(0,115,240,20,COL_BG);
-  l.setTextSize(1);l.setTextColor(COL_MUTED,COL_BG);
-  l.setCursor(5,119);l.print(clipped(hint,38));
+uint16_t colorMix(uint16_t x,uint16_t y,uint8_t ratio){
+  const uint16_t r=(((x>>11)&31)*(255-ratio)+((y>>11)&31)*ratio)/255;
+  const uint16_t g=(((x>>5)&63)*(255-ratio)+((y>>5)&63)*ratio)/255;
+  const uint16_t b=((x&31)*(255-ratio)+(y&31)*ratio)/255;
+  return (r<<11)|(g<<5)|b;
+}
+void drawBackdrop(){
+  auto& d=M5Cardputer.Display; const auto theme=palette();
+  // Smooth full-colour background in stripes, inexpensive compared with bitmaps.
+  for(int y=22;y<114;y+=3){
+    const uint8_t fade=(uint8_t)((y-22)*170/92);
+    d.fillRect(0,y,240,3,colorMix(theme.mid,theme.dark,fade));
+  }
+  d.drawLine(0,91,240,38,colorMix(theme.primary,theme.dark,105));
+  d.drawLine(0,99,240,46,colorMix(theme.primary,theme.dark,135));
+  for(int i=0;i<8;i++)
+    d.fillCircle((i*47+21)%239,24+(i*19)%85,1,colorMix(theme.shine,theme.dark,125));
+}
+void drawStatusBar(const String& heading){
+  auto& d=M5Cardputer.Display;const auto p=palette();
+  d.fillRect(0,0,240,22,0x080F);
+  d.fillRect(0,20,240,2,p.primary);
+  d.fillRoundRect(5,3,17,15,4,p.primary);
+  d.setTextSize(1);d.setTextColor(0x0000,p.primary);d.setCursor(10,7);d.print("N");
+  d.setTextColor(0xFFFF,0x080F);d.setCursor(28,7);d.print(clipped(heading,24));
+  const uint16_t signal=WiFi.status()==WL_CONNECTED?p.shine:0xFDA0;
+  // Small signal, SD and battery indicators.
+  d.fillCircle(191,13,2,signal);
+  d.drawLine(184,8,190,4,signal);d.drawLine(190,4,197,8,signal);
+  d.drawLine(187,10,190,8,signal);d.drawLine(190,8,194,10,signal);
+  d.fillRoundRect(203,5,12,10,2,sdReady?p.shine:0x4208);
+  d.setTextColor(0x0000,sdReady?p.shine:0x4208);d.setCursor(206,6);d.print("S");
+  const int batt=constrain((int)M5Cardputer.Power.getBatteryLevel(),0,100);
+  d.drawRect(219,5,16,11,0xFFFF);d.fillRect(236,8,2,5,0xFFFF);
+  if(batt)d.fillRect(221,7,12*batt/100,7,batt<15?0xFBC0:p.shine);
+}
+void drawFooter(const String& text){
+  auto& d=M5Cardputer.Display;const auto p=palette();
+  d.fillRect(0,114,240,21,0x080F);
+  d.fillRect(0,114,240,2,p.primary);
+  d.setTextSize(1);d.setTextColor(0xD6BA,0x080F);
+  d.setCursor(6,120);d.print(clipped(text,37));
 }
 void drawLines(const String& title,const String& a="",const String& b="",
                const String& c="",const String& d="",const String& e=""){
-  auto& l=M5Cardputer.Display;
-  if(fullRepaint)l.fillScreen(COL_BG);
-  drawStatusBar(title);
-  l.fillRect(0,22,240,92,COL_BG);
+  auto& l=M5Cardputer.Display;const auto p=palette();
+  static View previousView=View::HOME;
+  static String previousTitle;
+  const bool newFrame=fullRepaint || previousView!=view || previousTitle!=title;
+  if(newFrame){drawBackdrop();drawStatusBar(title);}
+  previousView=view;previousTitle=title;
   const String lines[]={a,b,c,d,e};
-  l.setTextSize(1);
   for(int i=0;i<5;i++){
-    const int y=26+i*17;
-    if(i%2==0)l.fillRoundRect(4,y-1,232,16,3,COL_PANEL);
-    l.setTextColor(i==0?COL_ACCENT2:COL_TEXT,i%2==0?COL_PANEL:COL_BG);
-    l.setCursor(10,y+4);
-    l.print(clipped(lines[i],36));
+    const int y=25+i*17;
+    const uint16_t fill=(i%2)?colorMix(p.dark,0x0000,130):colorMix(p.mid,0x0000,125);
+    // Rows cover the previous glyphs; avoid clearing the whole display per key.
+    l.fillRoundRect(6,y,228,16,4,fill);
+    if(i==0)l.fillRect(7,y+3,2,10,p.primary);
+    l.setTextSize(1);l.setTextColor(i==0?p.shine:0xFFFF,fill);
+    l.setCursor(14,y+4);l.print(clipped(lines[i],35));
   }
   drawFooter(statusLine);
 }
-void menuFrame(const String& title){
-  auto& l=M5Cardputer.Display;
-  if(fullRepaint)l.fillScreen(COL_BG);
-  drawStatusBar(title);
-}
+void menuFrame(const String& title){drawBackdrop();drawStatusBar(title);}
 void drawMenu(const String& title,const String opts[],int count,int selected,
               const String& hint="; Haut   . Bas   Entree OK"){
-  auto& l=M5Cardputer.Display;
-  menuFrame(title);
+  auto& l=M5Cardputer.Display;const auto p=palette();
+  static View lastMenuView=View::HOME;
+  static String lastMenuTitle;
+  static int lastPage=-1,lastSelected=-1,lastCount=-1;
   const int start=(selected/5)*5;
-  l.fillRect(0,22,240,92,COL_BG);
-  for(int r=0;r<5;r++){
-    const int idx=start+r;
-    if(idx>=count)break;
-    const int y=25+r*17;
-    if(idx==selected){
-      l.fillRoundRect(4,y-1,232,17,5,COL_ACCENT);
-      l.fillTriangle(9,y+4,9,y+12,15,y+8,COL_BG);
-      l.setTextColor(COL_BG,COL_ACCENT);
-    }else{
-      l.fillRoundRect(4,y-1,232,17,5,COL_PANEL);
-      l.setTextColor(COL_TEXT,COL_PANEL);
-    }
-    l.setTextSize(1);l.setCursor(19,y+4);
-    l.print(clipped(opts[idx],34));
+  const bool newPage=fullRepaint || lastMenuView!=view || lastMenuTitle!=title
+                   || lastPage!=start || lastCount!=count;
+  if(newPage)menuFrame(title);
+  for(int row=0;row<5;row++){
+    const int idx=start+row;if(idx>=count)break;
+    // Only the old and new selected items change on a key press.
+    if(!newPage && idx!=selected && idx!=lastSelected)continue;
+    const int y=26+17*row;const bool active=idx==selected;
+    const uint16_t fill=active?p.primary:colorMix(p.mid,0x0000,115);
+    l.fillRoundRect(5,y-1,230,17,5,fill);
+    l.drawRoundRect(5,y-1,230,17,5,active?p.shine:fill);
+    if(active)l.fillTriangle(10,y+4,10,y+12,17,y+8,0x0000);
+    else l.fillCircle(13,y+8,2,p.shine);
+    l.setTextSize(1);l.setTextColor(active?0x0000:0xFFFF,fill);
+    l.setCursor(23,y+4);l.print(clipped(opts[idx],32));
   }
-  drawFooter(count>5 ? String(selected+1)+"/"+String(count)+"   "+hint : hint);
+  lastMenuView=view;lastMenuTitle=title;lastPage=start;lastSelected=selected;lastCount=count;
+  drawFooter((count>5?String(selected+1)+"/"+String(count)+" ":"")+hint);
 }
 
 String sectionTitle(int section){
@@ -195,81 +234,81 @@ int sectionOptions(int section,String items[]){
   items[0]="Rechercher dans textes";items[1]="Batterie : tension et %";items[2]="Espace sur microSD";items[3]="A propos de NEXUS";return 4;
 }
 void drawHome(){
-  auto& l=M5Cardputer.Display;
+  auto& l=M5Cardputer.Display;const auto p=palette();
   static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME","AUTRES"};
-  static const char* descriptions[]={"Lire et ecrire","Parler et ecouter",
-    "Coder et decoder","Connexion reseau","Reglages et etat","Archives et outils"};
-  if(fullRepaint)l.fillScreen(COL_BG);
-  drawStatusBar("NEXUS MESSAGERIE");
-  l.fillRect(0,22,240,92,COL_BG);
-  // Main carousel card, six custom vector icons and two clear navigation arrows.
-  l.fillRoundRect(41,26,158,81,12,COL_PANEL);
-  l.drawRoundRect(41,26,158,81,12,COL_LINE);
-  l.fillRoundRect(49,30,142,3,1,COL_ACCENT2);
-  l.fillTriangle(13,65,31,55,31,75,COL_ACCENT);
-  l.fillTriangle(227,65,209,55,209,75,COL_ACCENT);
+  static const char* captions[]={"Conversations","Audio et microSD",
+    "Coder et decoder","Reseaux disponibles","Reglages","Archives et outils"};
+  drawBackdrop();drawStatusBar("NEXUS ADV");
+  // Solid title panel and glowing navigation, similar rhythm to Bruce's carousel.
+  l.fillRoundRect(38,26,164,76,11,colorMix(p.dark,0x0000,70));
+  l.drawRoundRect(38,26,164,76,11,p.primary);
+  l.drawFastHLine(52,30,136,p.shine);
+  l.fillTriangle(10,65,30,52,30,78,p.primary);
+  l.fillTriangle(230,65,210,52,210,78,p.primary);
+  l.fillTriangle(15,65,26,58,26,72,p.shine);
+  l.fillTriangle(225,65,214,58,214,72,p.shine);
   const int x=120,y=61;
   switch(homeIndex){
-    case 0: // message bubbles
-      l.fillRoundRect(x-29,y-19,51,30,6,COL_TEXT);
-      l.fillTriangle(x-19,y+9,x-13,y+9,x-20,y+18,COL_TEXT);
-      l.fillRoundRect(x-9,y-5,42,25,6,COL_ACCENT2);
-      l.fillTriangle(x+22,y+18,x+29,y+18,x+28,y+25,COL_ACCENT2);
-      l.drawFastHLine(x-1,y+3,23,COL_BG);
-      l.drawFastHLine(x-1,y+9,17,COL_BG);break;
-    case 1: // microphone with small sound waves
-      l.fillRoundRect(x-8,y-23,16,30,8,COL_ACCENT2);
-      l.drawLine(x-17,y-5,x-17,y+7,COL_TEXT);
-      l.drawLine(x+17,y-5,x+17,y+7,COL_TEXT);
-      l.drawFastHLine(x-17,y+10,34,COL_TEXT);
-      l.drawFastVLine(x,y+10,12,COL_TEXT);
-      l.drawFastHLine(x-10,y+22,20,COL_TEXT);
-      l.drawLine(x-17,y+7,x-11,y+13,COL_TEXT);
-      l.drawLine(x+17,y+7,x+11,y+13,COL_TEXT);break;
-    case 2: // dots and dashes (Morse)
-      l.fillCircle(x-28,y-7,7,COL_ACCENT2);
-      l.fillRoundRect(x-10,y-12,36,9,4,COL_TEXT);
-      l.fillCircle(x+33,y-7,6,COL_ACCENT);
-      l.fillRoundRect(x-31,y+9,21,8,4,COL_TEXT);
-      l.fillCircle(x+5,y+13,6,COL_ACCENT2);
-      l.fillRoundRect(x+17,y+9,20,8,4,COL_TEXT);break;
-    case 3: // Wi-Fi
-      l.drawLine(x-37,y-5,x,y-23,COL_ACCENT2);
-      l.drawLine(x,y-23,x+37,y-5,COL_ACCENT2);
-      l.drawLine(x-26,y+2,x,y-11,COL_TEXT);
-      l.drawLine(x,y-11,x+26,y+2,COL_TEXT);
-      l.drawLine(x-13,y+12,x,y+5,COL_ACCENT2);
-      l.drawLine(x,y+5,x+13,y+12,COL_ACCENT2);
-      l.fillCircle(x,y+22,6,COL_ACCENT);break;
-    case 4: // simple settings cog / sliders
-      l.drawCircle(x,y,20,COL_ACCENT2);
-      l.drawCircle(x,y,9,COL_TEXT);
-      l.fillCircle(x,y,4,COL_ACCENT);
+    case 0: // Crisp envelope + incoming notification
+      l.fillRoundRect(x-28,y-20,56,39,5,p.shine);
+      l.fillRoundRect(x-25,y-17,50,32,3,p.dark);
+      l.drawLine(x-25,y-15,x,y+5,p.shine);
+      l.drawLine(x+25,y-15,x,y+5,p.shine);
+      l.drawLine(x-25,y+14,x-8,y+1,p.shine);
+      l.drawLine(x+25,y+14,x+8,y+1,p.shine);
+      l.fillCircle(x+29,y-23,7,p.primary);break;
+    case 1: // Clear microphone silhouette and waves
+      l.fillRoundRect(x-9,y-23,18,30,9,p.shine);
+      l.drawRoundRect(x-21,y-12,42,32,13,p.primary);
+      l.fillRect(x-21,y-13,7,12,p.dark);
+      l.fillRect(x+14,y-13,7,12,p.dark);
+      l.drawFastVLine(x,y+20,9,p.shine);
+      l.fillRoundRect(x-14,y+29,28,4,2,p.shine);
+      l.drawLine(x-30,y-9,x-33,y+8,p.primary);
+      l.drawLine(x+30,y-9,x+33,y+8,p.primary);break;
+    case 2: // Morse pulse line, dots and dashes
+      l.fillCircle(x-30,y-11,7,p.shine);
+      l.fillRoundRect(x-13,y-17,43,12,5,p.shine);
+      l.fillCircle(x+36,y-11,6,p.primary);
+      l.fillRoundRect(x-36,y+13,24,8,4,p.primary);
+      l.fillCircle(x+3,y+17,6,p.shine);
+      l.fillRoundRect(x+17,y+13,23,8,4,p.shine);break;
+    case 3: // Three WiFi signal tiers
+      l.fillCircle(x,y+22,7,p.shine);
+      for(int i=-1;i<=1;i++){
+        l.drawLine(x+i*10,y+11-abs(i)*7,x+i*25,y-14-abs(i)*5,p.shine);
+        if(i!=0)l.drawLine(x+i*25,y-14-abs(i)*5,x+i*39,y+1-abs(i)*3,p.primary);
+      }
+      l.drawLine(x-34,y-20,x,y-34,p.primary);
+      l.drawLine(x,y-34,x+34,y-20,p.primary);break;
+    case 4: // Gear
+      l.fillCircle(x,y,25,p.shine);
+      l.fillCircle(x,y,18,p.dark);
+      l.fillCircle(x,y,9,p.primary);
+      l.fillCircle(x,y,3,p.dark);
       for(int i=0;i<8;i++){
-        float a=i*3.14159265f/4.0f;
-        l.drawLine(x+23*cosf(a),y+23*sinf(a),
-                   x+29*cosf(a),y+29*sinf(a),COL_TEXT);
+        const float a=i*3.14159265f/4;
+        l.drawLine(x+25*cosf(a),y+25*sinf(a),x+31*cosf(a),y+31*sinf(a),p.shine);
       }break;
-    default: // folder and tools
-      l.fillRoundRect(x-32,y-16,64,42,6,COL_ACCENT2);
-      l.fillRoundRect(x-31,y-22,29,10,3,COL_ACCENT2);
-      l.drawRoundRect(x-24,y-9,48,26,4,COL_BG);
-      l.fillCircle(x-13,y+4,4,COL_BG);
-      l.fillCircle(x,y+4,4,COL_BG);
-      l.fillCircle(x+13,y+4,4,COL_BG);break;
+    default: // Utility folder
+      l.fillRoundRect(x-36,y-20,36,12,3,p.shine);
+      l.fillRoundRect(x-36,y-14,72,45,5,p.primary);
+      l.drawRoundRect(x-32,y-9,64,34,4,p.shine);
+      l.fillCircle(x-19,y+8,5,p.dark);
+      l.fillCircle(x,y+8,5,p.dark);
+      l.fillCircle(x+19,y+8,5,p.dark);break;
   }
-  l.setTextSize(1);l.setTextColor(COL_TEXT,COL_PANEL);
-  l.setCursor(120-strlen(names[homeIndex])*3,90);
-  l.print(names[homeIndex]);
-  l.setTextColor(COL_MUTED,COL_BG);
-  l.setCursor(120-strlen(descriptions[homeIndex])*3,108);
-  l.print(descriptions[homeIndex]);
-  if(unreadCount>0){
-    l.fillRoundRect(153,32,39,15,5,COL_ACCENT);
-    l.setTextColor(COL_BG,COL_ACCENT);
-    l.setCursor(157,36);l.print(String(unreadCount>99?"99+":String(unreadCount))+" nouv");
+  l.fillRoundRect(58,87,124,13,3,p.primary);
+  l.setTextSize(1);l.setTextColor(0x0000,p.primary);
+  l.setCursor(120-strlen(names[homeIndex])*3,90);l.print(names[homeIndex]);
+  l.setTextColor(0xFFFF,p.dark);
+  l.setCursor(120-strlen(captions[homeIndex])*3,105);l.print(captions[homeIndex]);
+  if(unreadCount>0 && homeIndex==0){
+    l.fillRoundRect(170,24,36,15,5,0xFC00);
+    l.setTextColor(0x0000,0xFC00);l.setCursor(174,28);
+    l.print(unreadCount>99?"99+":String(unreadCount));
   }
-  drawFooter("< ,     / >    Entree : ouvrir");
+  drawFooter(" , / CHOISIR   ENTREE OUVRIR");
 }
 
 void paint(){
@@ -305,6 +344,70 @@ void paint(){
      shown.length()>60?shown.substring(60,90):"",
      shown.length()>90?shown.substring(90):"",
      "OPT: retour");break;}
+ case View::VOICE_ERROR:
+   drawLines("VOCAL : DIAGNOSTIC",
+      clipped(statusLine,35),
+      "1. Verifier la carte microSD",
+      "2. Micro ADV : codec ES8311",
+      "ENTREE : nouvel essai",
+      "OPT : retour au menu");break;
+ case View::VOICE_UPLOADING:
+   drawLines("ENVOI DU VOCAL",
+     "Transfert WAV securise",
+     "Wi-Fi et serveur NEXUS",
+     "Vocal conserve jusqu'a confirmation",
+     "OPT : quitter l'affichage");break;
+ case View::VOICE_RESULT:
+   drawLines("RESULTAT DU VOCAL",
+     clipped(statusLine,35),
+     "ENTREE : menu vocaux",
+     "OPT : brouillon vocal");break;
+ case View::VOICE_READY: {
+   if(!sdReady || !SD.exists(TX_AUDIO)){
+     drawLines("VOCAL NON DISPONIBLE","Aucun brouillon sur microSD","Retour : OPT");
+     break;
+   }
+   String items[]={"Envoyer le vocal","Ecouter le brouillon","Reenregistrer (remplacer)","Garder et retourner"};
+   drawMenu("VOCAL PRET",items,4,voiceChoice,";/. choisir  ENTREE confirmer");
+   break;
+ }
+ case View::VOICE_RECORDING: {
+   if(voiceRecordQueued){
+     drawLines("MICRO EN PREPARATION",
+       "Connexion HTTPS en cours",
+       "Micro demarre sans conflit reseau",
+       "OPT : annuler",
+       "Le brouillon reste conserve");break;
+   }
+   const uint32_t seconds=voiceRecordedSamples/AUDIO_RATE;
+   drawLines("ENREGISTREMENT VOCAL",
+      "Micro actif : 16 kHz mono",
+      "Duree: "+String(seconds)+"/3 secondes",
+      "Carte microSD en ecriture",
+      "OPT : annuler",
+      "Patiente : capture audio");break;
+ }
+ case View::SEND_CONFIRM: {
+   const String shown=editor.length()>92?editor.substring(0,92)+"...":editor;
+   drawLines("CONFIRMER L'ENVOI",
+     "Vers : "+recipient,
+     shown.substring(0,min((size_t)31,shown.length())),
+     shown.length()>31?shown.substring(31,min((size_t)62,shown.length())):"",
+     "ENTREE envoyer / OPT modifier",
+     "Le texte reste en brouillon");break;
+ }
+ case View::SEND_PROGRESS:
+   drawLines("ENVOI EN COURS",
+      "Message vers : "+recipient,
+      "Connexion securisee HTTPS",
+      "Clavier libre : retour OPT",
+      "Patiente : confirmation",
+      "Aucun doublon envoye");break;
+ case View::SEND_RESULT:
+   drawLines("STATUT DE L'ENVOI",
+      clipped(statusLine,35),
+      "ENTREE : retour messages",
+      "OPT : revenir au brouillon");break;
  case View::VOICE_ARCHIVE: {
    if(!sdReady){drawLines("ARCHIVES VOCALES","Inserer une microSD"," puis detecter microSD","OPT: retour");break;}
    if(!voiceCount){drawLines("ARCHIVES VOCALES","Aucun vocal archive","Les vocaux recus sont","sauvegardes automatiquement","OPT: retour");break;}
@@ -412,7 +515,7 @@ void paint(){
    if(sdReady){const uint64_t t=SD.totalBytes(),u=SD.usedBytes();
      free="Libre: "+String((uint32_t)((t>u?t-u:0)/(1024*1024)))+" Mio";
      total="Total: "+String((uint32_t)(t/(1024*1024)))+" Mio";}
-   drawLines("STOCKAGE ET VERSION","NEXUS STABILITE BETA",free,total,
+   drawLines("STOCKAGE ET VERSION","NEXUS NEON MORSE V2 BETA",free,total,
      "Code conserve en NVS", "OPT : retour");break;}
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
@@ -506,8 +609,17 @@ bool remember(uint32_t id,String sender,String kind,String text){
 }
 void initSd(){
   SPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS);
-  sdReady=SD.begin(SD_CS,SPI,20000000);
-  if(sdReady){historySize=0;loadHistory();}
+  sdReady=SD.begin(SD_CS,SPI,12000000);
+  if(!sdReady){SD.end();sdReady=SD.begin(SD_CS,SPI,4000000);}
+  if(sdReady){
+    // Recover from an interrupted transactional voice replacement.
+    if(SD.exists(OLD_TX_AUDIO) && !SD.exists(TX_AUDIO))
+      SD.rename(OLD_TX_AUDIO,TX_AUDIO);
+    if(SD.exists(OLD_TX_AUDIO) && SD.exists(TX_AUDIO))
+      SD.remove(OLD_TX_AUDIO);
+    if(SD.exists(NEW_TX_AUDIO))SD.remove(NEW_TX_AUDIO);
+    historySize=0;loadHistory();
+  }
   else{historySize=0;cursor=0;} // No persistent journal: fetch from server on boot.
 }
 bool timeReady(){
@@ -915,6 +1027,10 @@ void nexusNetworkWorker(void* argument){
   NetReply* reply=new NetReply();
   if(!reply){delete request;vTaskDelete(nullptr);return;}
   reply->readId=request->readId;
+  reply->kind=request->kind;
+  reply->clientId=request->clientId;
+  reply->sentText=request->text;
+  reply->recipient=request->recipient;
   if(WiFi.status()==WL_CONNECTED && request->url.startsWith("https://")){
     if(time(nullptr)<1700000000){
       configTime(0,0,"pool.ntp.org","time.google.com");
@@ -933,12 +1049,47 @@ void nexusNetworkWorker(void* argument){
         *content=http.getString();
       http.end();
     };
-    networkCall("/session",reply->sessionCode,&reply->session);
-    if(reply->sessionCode==200){
-      networkCall("/messages?after="+String(request->cursor),reply->inboxCode,&reply->inbox);
-      networkCall("/unread",reply->unreadCode,&reply->unread);
-      if(request->readId)
-        networkCall("/messages/"+String(request->readId)+"/read",reply->readCode,nullptr,true);
+    if(request->kind==NetRequest::Kind::SEND_TEXT){
+      WiFiClientSecure client;HTTPClient http;
+      client.setCACert(NEXUS_TRUSTED_ROOTS);client.setTimeout(5000);
+      http.setConnectTimeout(4000);http.setTimeout(5000);
+      if(http.begin(client,request->url+"/messages")){
+        http.addHeader("Authorization","Bearer "+request->token);
+        http.addHeader("X-Nexus-User",request->recipient=="bob"?"alice":"bob");
+        http.addHeader("Content-Type","application/json");
+        reply->sendCode=http.POST((uint8_t*)request->payload.c_str(),request->payload.length());
+        if(reply->sendCode>=200 && reply->sendCode<300 && http.getSize()<=2048)
+          reply->sendResponse=http.getString();
+        http.end();
+      }
+    }else if(request->kind==NetRequest::Kind::SEND_VOICE){
+      File f=SD.open(TX_AUDIO,FILE_READ);
+      if(f && f.size()>=44 && f.size()<=MAX_VOICE){
+        WiFiClientSecure client;HTTPClient http;
+        client.setCACert(NEXUS_TRUSTED_ROOTS);client.setTimeout(8000);
+        http.setConnectTimeout(5000);http.setTimeout(8000);
+        if(http.begin(client,request->url+"/voice/"+request->recipient)){
+          http.addHeader("Authorization","Bearer "+request->token);
+          http.addHeader("X-Nexus-User",request->recipient=="bob"?"alice":"bob");
+          http.addHeader("Content-Type","audio/wav");
+          http.addHeader("X-Client-Id",request->clientId);
+          reply->sendCode=http.sendRequest("POST",&f,f.size());
+          if(reply->sendCode>=200&&reply->sendCode<300&&http.getSize()<=2048)
+            reply->sendResponse=http.getString();
+          http.end();
+        }
+      }else reply->sendCode=-90; // missing or invalid local WAV
+      if(f)f.close();
+    }else if(request->kind==NetRequest::Kind::OUTBOX){
+      networkCall("/outbox?after=0",reply->outboxCode,&reply->outboxPayload);
+    }else{
+      networkCall("/session",reply->sessionCode,&reply->session);
+      if(reply->sessionCode==200){
+        networkCall("/messages?after="+String(request->cursor),reply->inboxCode,&reply->inbox);
+        networkCall("/unread",reply->unreadCode,&reply->unread);
+        if(request->readId)
+          networkCall("/messages/"+String(request->readId)+"/read",reply->readCode,nullptr,true);
+      }
     }
   }
   delete request;
@@ -951,6 +1102,62 @@ void serviceNetworkReplies(){
   if(xQueueReceive(netReplyQueue,&reply,0)!=pdTRUE)return;
   netWorkerBusy=false;
   if(!reply)return;
+  if(reply->kind==NetRequest::Kind::OUTBOX){
+    JsonDocument doc;
+    if(reply->outboxCode==200 && !deserializeJson(doc,reply->outboxPayload)){
+      JsonArray messages=doc["messages"].as<JsonArray>();
+      if(messages.size()==0)lastSentInfo="Aucun message envoye";
+      else {
+        JsonObject newest=messages[0].as<JsonObject>();
+        const String peer=newest["recipient"]|"?", kind=newest["kind"]|"?";
+        const bool read=(newest["read"]|0)==1;
+        lastSentInfo="Vers "+peer+" / "+kind+(read?" / LU":" / non lu");
+      }
+      setStatus("Messages envoyes actualises");
+    }else{
+      lastSentInfo="Serveur inaccessible (HTTP "+String(reply->outboxCode)+")";
+      setStatus("Messages envoyes : erreur reseau");
+    }
+    if(view==View::SENT)paint();
+    delete reply;return;
+  }
+  if(reply->kind==NetRequest::Kind::SEND_VOICE){
+    voiceUploadBusy=false;
+    JsonDocument response;
+    const bool confirmed=reply->sendCode>=200 && reply->sendCode<300 &&
+        !deserializeJson(response,reply->sendResponse) && (response["id"]|0u)>0;
+    if(confirmed && pendingVoiceId==reply->clientId){
+      // Acknowledged: only now discard the sent WAV.
+      pendingVoiceId="";if(prefsReady)prefs.remove("vocid");
+      bool removed=sdReady && SD.remove(TX_AUDIO);
+      setStatus(removed?"Vocal envoye et confirme":"Vocal envoye, WAV a supprimer");
+    }else{
+      setStatus("Vocal non confirme (HTTP "+String(reply->sendCode)+") : conserve");
+    }
+    if(view==View::VOICE_UPLOADING)changeView(View::VOICE_RESULT);
+    delete reply;return;
+  }
+  if(reply->kind==NetRequest::Kind::SEND_TEXT){
+    textSending=false;
+    JsonDocument response;
+    const bool received=reply->sendCode>=200 && reply->sendCode<300 &&
+        !deserializeJson(response,reply->sendResponse) && (response["id"]|0u)>0;
+    const uint32_t id=received?(response["id"]|0u):0u;
+    if(received && pendingTextId==reply->clientId){
+      const String from=reply->recipient=="bob"?"alice":"bob";
+      const bool archived=!sdReady || archiveText(id,from,(uint32_t)time(nullptr),reply->sentText,true);
+      // Only clear an editor that matches the successfully acknowledged payload.
+      if(editor==reply->sentText){editor="";draftDirty=false;if(prefsReady)prefs.remove("draft");}
+      pendingTextId="";if(prefsReady)prefs.remove("txtid");
+      setStatus(archived?"Message envoye et confirme":"Envoye, archive microSD non sauvegardee");
+      lastSentInfo="Message #"+String(id)+" vers "+reply->recipient;
+      if(view==View::SEND_PROGRESS)changeView(View::SEND_RESULT);
+    }else {
+      setStatus("Envoi non confirme (HTTP "+String(reply->sendCode)+") : reessayer");
+      if(view==View::SEND_PROGRESS)changeView(View::SEND_RESULT);
+    }
+    delete reply;return;
+  }
   JsonDocument session;
   const String expected=recipient=="bob"?"alice":"bob";
   serverReady=reply->sessionCode==200 && !deserializeJson(session,reply->session)
@@ -965,7 +1172,7 @@ void serviceNetworkReplies(){
   delete reply;
 }
 void scheduleNetworkPoll(){
-  if(netWorkerBusy || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
+  if(netWorkerBusy || textSendQueued || voiceUploadQueued || outboxQueued || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
      !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
   if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
   NetRequest* request=new NetRequest();
@@ -979,25 +1186,27 @@ void scheduleNetworkPoll(){
   }
 }
 void refreshSent(){
-  if(!configured()) {setStatus("Configurer serveur et jeton");paint();return;}
-  WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/outbox?after=0")){paint();return;}
-  const int code=http.GET();
-  String body=code==200 ? http.getString() : "";
-  http.end();
-  if(code!=200){setStatus("Boite envoi HTTP "+String(code));paint();return;}
-  JsonDocument doc;
-  if(deserializeJson(doc,body)){setStatus("Reponse serveur invalide");paint();return;}
-  JsonArray list=doc["messages"].as<JsonArray>();
-  if(list.size()==0){lastSentInfo="Aucun message envoye";}
-  else {
-    JsonObject last=list[0].as<JsonObject>();
-    String peer=last["recipient"]|"?",kind=last["kind"]|"?";
-    bool read=(last["read"]|0)==1;
-    lastSentInfo=String("Vers ")+peer+" / "+kind+(read?" / LU":" / non lu");
+  if(!configured() || WiFi.status()!=WL_CONNECTED){
+    lastSentInfo="Wi-Fi ou serveur non configure";
+    setStatus("Liste envoyes indisponible");paint();return;
   }
+  outboxQueued=true;
+  lastSentInfo="Chargement des messages envoyes...";
   paint();
 }
+void tryStartOutbox(){
+  if(!outboxQueued || netWorkerBusy || textSendQueued || voiceUploadQueued)return;
+  outboxQueued=false;
+  NetRequest* request=new NetRequest();
+  if(!request){setStatus("RAM insuffisante pour la liste");return;}
+  request->kind=NetRequest::Kind::OUTBOX;
+  request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
+  netWorkerBusy=true;
+  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_sent",12288,request,1,nullptr,0)!=pdPASS){
+    netWorkerBusy=false;delete request;setStatus("Echec creation de la tache HTTPS");
+  }
+}
+
 void acknowledgeMessage(uint32_t id){
   if(!id || !configured() || WiFi.status()!=WL_CONNECTED)return;
   WiFiClientSecure client;HTTPClient http;
@@ -1007,34 +1216,47 @@ void acknowledgeMessage(uint32_t id){
   if(result!=200)setStatus("Accuse lecture non transmis");
   else refreshUnread();
 }
+// Send requests use the existing FreeRTOS HTTPS worker rather than the UI loop.
 void sendText(){
-  editor.trim();if(editor.isEmpty())return;
-  if(!pendingTextId.length()){pendingTextId=nonce();prefs.putString("txtid",pendingTextId);}
-  JsonDocument doc;doc["to"]=recipient;doc["text"]=editor;doc["client_id"]=pendingTextId;
-  String body;serializeJson(doc,body);WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/messages"))return;
-  http.addHeader("Content-Type","application/json");
-  int code=http.POST((uint8_t*)body.c_str(),body.length());
-  const String response=(code>=200&&code<300)?http.getString():"";
-  http.end();
-  if(code>=200&&code<300){
-    bool saved=true;
-    if(sdReady){
-      JsonDocument result;
-      if(deserializeJson(result,response))saved=false;
-      else{
-        const uint32_t id=result["id"]|0u;
-        const String from=recipient=="bob"?"alice":"bob";
-        saved=archiveText(id,from,(uint32_t)time(nullptr),editor,true);
-      }
+  editor.trim();
+  if(editor.isEmpty()){setStatus("Ecris un message avant l'envoi");changeView(View::COMPOSE);return;}
+  if(!configured()){setStatus("Configurer serveur et jeton");changeView(View::COMPOSE);return;}
+  if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi absent : brouillon conserve");changeView(View::COMPOSE);return;}
+  if(textSendQueued){setStatus("Un envoi est deja programme");return;}
+  if(pendingTextId.isEmpty()){
+    const String id=nonce();
+    if(!prefsReady){setStatus("NVS indisponible : envoi non securise");changeView(View::COMPOSE);return;}
+    prefs.putString("txtid",id);
+    if(prefs.getString("txtid","")!=id){
+      storageFault=true;setStatus("NVS pleine : identifiant non sauvegarde");
+      changeView(View::COMPOSE);return;
     }
-    editor="";draftDirty=false;prefs.putString("draft","");
-    pendingTextId="";prefs.remove("txtid");
-    setStatus(saved?"Texte envoye":"Envoye / archive texte microSD KO");
-    changeView(View::HOME);
+    pendingTextId=id;
   }
-  else{setStatus("Envoi refuse: "+String(code));paint();}
+  outgoingText=editor;outgoingRecipient=recipient;outgoingId=pendingTextId;
+  textSendQueued=true;
+  setStatus("Envoi HTTPS en cours...");
+  changeView(View::SEND_PROGRESS);
 }
+void tryStartTextSend(){
+  if(!textSendQueued || netWorkerBusy)return;
+  if(WiFi.status()!=WL_CONNECTED){textSendQueued=false;setStatus("Wi-Fi perdu, texte garde");changeView(View::SEND_RESULT);return;}
+  if(ESP.getFreeHeap()<35000){textSendQueued=false;setStatus("RAM insuffisante : texte garde");changeView(View::SEND_RESULT);return;}
+  NetRequest* request=new NetRequest();
+  if(!request){textSendQueued=false;setStatus("Memoire indisponible");changeView(View::SEND_RESULT);return;}
+  request->kind=NetRequest::Kind::SEND_TEXT;
+  request->url=serverUrl;request->token=deviceToken;request->recipient=outgoingRecipient;
+  request->text=outgoingText;request->clientId=outgoingId;
+  JsonDocument payload;payload["to"]=outgoingRecipient;payload["text"]=outgoingText;payload["client_id"]=outgoingId;
+  serializeJson(payload,request->payload);
+  netWorkerBusy=true;textSendQueued=false;textSending=true;
+  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_send",12288,request,1,nullptr,0)!=pdPASS){
+    netWorkerBusy=false;textSending=false;delete request;
+    setStatus("Tache HTTPS indisponible : reessayer");
+    changeView(View::SEND_RESULT);
+  }
+}
+
 void writeLE16(File& f,uint16_t v){uint8_t a[2]={(uint8_t)v,(uint8_t)(v>>8)};f.write(a,2);}
 void writeLE32(File& f,uint32_t v){uint8_t a[4]={(uint8_t)v,(uint8_t)(v>>8),(uint8_t)(v>>16),(uint8_t)(v>>24)};f.write(a,4);}
 void writeWavHeader(File& f,uint32_t samples){
@@ -1043,57 +1265,139 @@ void writeWavHeader(File& f,uint32_t samples){
   writeLE32(f,16);writeLE16(f,1);writeLE16(f,1);writeLE32(f,AUDIO_RATE);
   writeLE32(f,AUDIO_RATE*2);writeLE16(f,2);writeLE16(f,16);f.write((const uint8_t*)"data",4);writeLE32(f,bytes);
 }
-void recordVoice(){
-  if(pendingVoiceId.length() || (sdReady && SD.exists(TX_AUDIO))){
-    setStatus("Vocal deja present: U envoyer, Z effacer");paint();return;
+void recordVoice(bool replaceOld=false){
+  if(netWorkerBusy){
+    voiceRecordQueued=true;voiceRecordReplace=replaceOld;
+    voiceRecordedSamples=0;
+    setStatus("Preparation du microphone apres HTTPS");
+    changeView(View::VOICE_RECORDING);return;
   }
-  if(!sdReady){setStatus("Inserer une microSD (vocal)");paint();return;}
-  SD.remove(TX_AUDIO); // Ensure a new recording never appends to a previous WAV.
-  File f=SD.open(TX_AUDIO,FILE_WRITE);
-  if(!f){setStatus("Erreur creation WAV");paint();return;}
-  f.seek(0);writeWavHeader(f,AUDIO_FRAME*AUDIO_FRAMES);
-  if(f.position()!=44){f.close();SD.remove(TX_AUDIO);setStatus("Entete WAV impossible");paint();return;}
-  M5Cardputer.Speaker.end();
-  if(!M5Cardputer.Mic.begin()){f.close();SD.remove(TX_AUDIO);setStatus("Micro non initialise");paint();return;}
-  delay(1200); // ES8311 needs codec warm-up after Mic.begin.
-  setStatus("REC 3 secondes (micro actif)");paint();
-  bool ok=true;uint32_t total=0;
-  int16_t audio[AUDIO_FRAME]; // 2 KB stack; never requires PSRAM
+  if(!sdReady){setStatus("Carte microSD absente : vocal impossible");changeView(View::VOICE_ERROR);return;}
+  // An earlier recording must remain available until the user chooses to replace it.
+  if(!replaceOld && SD.exists(TX_AUDIO)){
+    voiceChoice=0;setStatus("Brouillon vocal present : choisir une action");
+    changeView(View::VOICE_READY);return;
+  }
+  if(!replaceOld && pendingVoiceId.length() && !SD.exists(TX_AUDIO)){
+    pendingVoiceId="";if(prefsReady)prefs.remove("vocid"); // stale ID only
+  }
+  SD.remove(NEW_TX_AUDIO);
+  File f=SD.open(NEW_TX_AUDIO,FILE_WRITE);
+  if(!f){setStatus("Impossible de creer WAV sur microSD");changeView(View::VOICE_ERROR);return;}
+  writeWavHeader(f,AUDIO_FRAME*AUDIO_FRAMES);
+  if(f.position()!=44){
+    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Erreur entete WAV : SD");changeView(View::VOICE_ERROR);return;
+  }
+  M5Cardputer.Speaker.end(); // exclusive I2S with microphone in M5Unified
+  M5Cardputer.Mic.end(); // clear any interrupted capture from a previous attempt
+  if(!M5Cardputer.Mic.begin()){
+    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Micro ES8311 non initialise");changeView(View::VOICE_ERROR);return;
+  }
+  voiceRecordedSamples=0;changeView(View::VOICE_RECORDING);
+  delay(1150); // ES8311 ADC analog warm-up, not a UI/network wait
+  alignas(4) int16_t audio[AUDIO_FRAME];
+  bool failed=false,cancelled=false,allZero=true;uint32_t samples=0;
   for(size_t i=0;i<AUDIO_FRAMES;i++){
-    if(!M5Cardputer.Mic.record(audio,AUDIO_FRAME,AUDIO_RATE,false)){ok=false;break;}
-    uint32_t t=millis();while(M5Cardputer.Mic.isRecording() && millis()-t<1800)delay(1);
-    if(M5Cardputer.Mic.isRecording()){ok=false;break;}
-    if(f.write((uint8_t*)audio,sizeof(audio))!=sizeof(audio)){ok=false;break;}
-    total+=AUDIO_FRAME;
+    if(!M5Cardputer.Mic.record(audio,AUDIO_FRAME,AUDIO_RATE,false)){
+      failed=true;setStatus("Micro : capture refusee (I2S)");break;
+    }
+    const uint32_t beginAt=millis();
+    while(M5Cardputer.Mic.isRecording() && millis()-beginAt<1600){
+      M5Cardputer.update();
+      if(M5Cardputer.Keyboard.keysState().opt){cancelled=true;break;}
+      delay(2);
+    }
+    if(cancelled)break;
+    if(M5Cardputer.Mic.isRecording()){
+      failed=true;setStatus("Micro : capture trop lente");break;
+    }
+    for(int j=0;j<AUDIO_FRAME;j++)if(audio[j]!=0){allZero=false;break;}
+    if(f.write((uint8_t*)audio,sizeof(audio))!=sizeof(audio)){
+      failed=true;setStatus("Carte microSD : ecriture interrompue");break;
+    }
+    samples+=AUDIO_FRAME;voiceRecordedSamples=samples;
+    if(i%8==7)paint(); // visible recording progress every ~0.5 s
   }
-  M5Cardputer.Mic.end();f.close();
-  if(!ok||total!=AUDIO_FRAME*AUDIO_FRAMES){SD.remove(TX_AUDIO);setStatus("Echec enregistrement");paint();return;}
-  File verify=SD.open(TX_AUDIO,FILE_READ);
-  const bool exact=verify && verify.size()==44+2*total;
+  M5Cardputer.Mic.end();f.flush();f.close();
+  if(cancelled || failed || samples!=AUDIO_FRAME*AUDIO_FRAMES || allZero){
+    SD.remove(NEW_TX_AUDIO);
+    if(cancelled)setStatus("Enregistrement annule : ancien vocal conserve");
+    else if(allZero && !failed)setStatus("Micro muet : verifier codec ES8311");
+    else if(!failed)setStatus("Enregistrement incomplet");
+    changeView(View::VOICE_ERROR);return;
+  }
+  File verify=SD.open(NEW_TX_AUDIO,FILE_READ);
+  const bool valid=verify && verify.size()==44+2*samples;
   if(verify)verify.close();
-  if(!exact){SD.remove(TX_AUDIO);setStatus("WAV incomplet sur microSD");paint();return;}
-  pendingVoiceId=nonce();prefs.putString("vocid",pendingVoiceId);
-  setStatus("Vocal pret: U pour envoyer");paint();
+  if(!valid){
+    SD.remove(NEW_TX_AUDIO);setStatus("MicroSD : fichier WAV incomplet");changeView(View::VOICE_ERROR);return;
+  }
+  // Transactional replacement: preserve the old voice until the new one is valid.
+  SD.remove(OLD_TX_AUDIO);
+  const bool hadOld=SD.exists(TX_AUDIO);
+  if(hadOld && !SD.rename(TX_AUDIO,OLD_TX_AUDIO)){
+    SD.remove(NEW_TX_AUDIO);setStatus("Impossible de proteger l'ancien vocal");changeView(View::VOICE_ERROR);return;
+  }
+  if(!SD.rename(NEW_TX_AUDIO,TX_AUDIO)){
+    if(hadOld)SD.rename(OLD_TX_AUDIO,TX_AUDIO);
+    SD.remove(NEW_TX_AUDIO);
+    setStatus("Impossible de finaliser WAV, ancien conserve");changeView(View::VOICE_ERROR);return;
+  }
+  if(hadOld)SD.remove(OLD_TX_AUDIO);
+  pendingVoiceId=nonce();
+  if(prefsReady){
+    prefs.putString("vocid",pendingVoiceId);
+    if(prefs.getString("vocid","")!=pendingVoiceId){
+      storageFault=true;setStatus("Vocal pret, NVS pleine : ID temporaire");
+    }else setStatus("Vocal de 3 s enregistre !");
+  }else setStatus("Vocal pret, memoire NVS indisponible");
+  voiceChoice=0;changeView(View::VOICE_READY);
 }
 void uploadVoice(){
-  if(!sdReady){setStatus("MicroSD requise");paint();return;}
-  File f=SD.open(TX_AUDIO,FILE_READ);if(!f){setStatus("Enregistrer d'abord (V)");paint();return;}
-  if(f.size()<44||f.size()>MAX_VOICE){f.close();setStatus("WAV trop volumineux");paint();return;}
-  if(pendingVoiceId.isEmpty()){pendingVoiceId=nonce();prefs.putString("vocid",pendingVoiceId);}
-  WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/voice/"+recipient)){f.close();return;}
-  http.addHeader("Content-Type","audio/wav");http.addHeader("X-Client-Id",pendingVoiceId);
-  setStatus("Envoi vocal en cours...");paint();
-  int code=http.sendRequest("POST",&f,f.size());http.end();f.close();
-  if(code>=200&&code<300){
-    // Confirmed upload: do not allow the same WAV to be sent again with a fresh id.
-    pendingVoiceId="";prefs.remove("vocid");
-    const bool deleted=SD.remove(TX_AUDIO);
-    setStatus(deleted?"Vocal envoye":"Vocal envoye (effacer WAV: Z)");
+  if(!sdReady){setStatus("MicroSD requise pour envoyer un vocal");paint();return;}
+  if(textSendQueued || voiceUploadQueued || voiceUploadBusy){
+    setStatus("Un transfert est deja en cours");paint();return;
   }
-  else setStatus("Vocal en attente (U): "+String(code));
-  paint();
+  File f=SD.open(TX_AUDIO,FILE_READ);
+  if(!f){setStatus("Enregistre un vocal avant de l'envoyer");paint();return;}
+  const size_t length=f.size();f.close();
+  if(length<44 || length>MAX_VOICE || !wavFileValid(TX_AUDIO)){
+    setStatus("Brouillon WAV absent ou invalide");paint();return;
+  }
+  if(!configured() || WiFi.status()!=WL_CONNECTED){
+    setStatus("Wi-Fi/HTTPS indisponible : vocal conserve");paint();return;
+  }
+  if(pendingVoiceId.isEmpty())pendingVoiceId=nonce();
+  if(!prefsReady){setStatus("NVS indisponible : vocal conserve");paint();return;}
+  // Verify the idempotency key even when a previous recording created it.
+  if(prefs.getString("vocid","")!=pendingVoiceId){
+    prefs.putString("vocid",pendingVoiceId);
+    if(prefs.getString("vocid","")!=pendingVoiceId){
+      storageFault=true;setStatus("NVS pleine : vocal conserve");paint();return;
+    }
+  }
+  voiceUploadQueued=true;
+  setStatus("Transfert vocal programme...");
+  changeView(View::VOICE_UPLOADING);
 }
+void tryStartVoiceUpload(){
+  if(!voiceUploadQueued || netWorkerBusy)return;
+  voiceUploadQueued=false;
+  if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi perdu : vocal conserve");changeView(View::VOICE_RESULT);return;}
+  if(ESP.getFreeHeap()<35000){setStatus("RAM faible : vocal conserve");changeView(View::VOICE_RESULT);return;}
+  NetRequest* request=new NetRequest();
+  if(!request){setStatus("Memoire insuffisante");changeView(View::VOICE_RESULT);return;}
+  request->kind=NetRequest::Kind::SEND_VOICE;
+  request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
+  request->clientId=pendingVoiceId;
+  netWorkerBusy=true;voiceUploadBusy=true;
+  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_voice_tx",12288,request,1,nullptr,0)!=pdPASS){
+    voiceUploadBusy=false;netWorkerBusy=false;delete request;
+    setStatus("Tache HTTPS indisponible : vocal conserve");
+    changeView(View::VOICE_RESULT);
+  }
+}
+
 void downloadVoice(){
   if(!sdReady||!lastVoiceId){setStatus("Pas de microSD ou vocal");paint();return;}
   WiFiClientSecure client;HTTPClient http;
@@ -1356,7 +1660,11 @@ void openSectionSelection(){
         // Show cached messages instantly; defer server acknowledgement.
         if(historySize)pendingReadId=history[historySize-1].id;
         break;
-      case 1:changeView(View::COMPOSE);break;
+      case 1:
+        if(textSendQueued || textSending){
+          setStatus("Envoi deja en cours");changeView(View::SEND_PROGRESS);
+        }else changeView(View::COMPOSE);
+        break;
       case 2:changeView(View::SENT);refreshSent();break;
     }
   }else if(homeIndex==1){
@@ -1400,6 +1708,23 @@ void openSectionSelection(){
 }
 
 void handleInput(){
+  if(voiceRecordQueued){
+    if(M5Cardputer.Keyboard.isPressed() && M5Cardputer.Keyboard.keysState().opt){
+      voiceRecordQueued=false;setStatus("Enregistrement reporte annule");
+      changeView(View::SECTION);
+    }
+    return;
+  }
+  // The HTTPS voice worker owns the microSD while streaming. Block other
+  // SD and audio actions, but allow a visual return with OPT.
+  if(voiceUploadBusy || voiceUploadQueued){
+    M5Cardputer.Keyboard.isPressed();
+    if(M5Cardputer.Keyboard.isPressed() && M5Cardputer.Keyboard.keysState().opt &&
+       view!=View::VOICE_RESULT && view!=View::SECTION){
+      changeView(View::VOICE_RESULT);
+    }
+    return;
+  }
   // In menus the physical ; . , / keys work as arrows WITHOUT Fn.
   // Text/password editors retain their normal punctuation keys.
   // Fn+arrows remain supported. Change detection includes direction keys.
@@ -1432,8 +1757,14 @@ void handleInput(){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
     else if(view==View::SEARCH_VIEW)changeView(View::SEARCH_RESULTS);
+    else if(view==View::VOICE_ERROR)changeView(View::SECTION);
+    else if(view==View::VOICE_UPLOADING)changeView(View::VOICE_RESULT);
+    else if(view==View::VOICE_RESULT)changeView(View::VOICE_READY);
+    else if(view==View::SEND_CONFIRM)changeView(View::COMPOSE);
+    else if(view==View::SEND_PROGRESS)changeView(View::SECTION);
+    else if(view==View::SEND_RESULT)changeView(editor.isEmpty()?View::SECTION:View::COMPOSE);
     else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN ||
-            view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO || view==View::BATTERY_INFO ||
+            view==View::VOICE_READY || view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO || view==View::BATTERY_INFO ||
             view==View::SEARCH_EDIT || view==View::SEARCH_RESULTS)changeView(View::SECTION);
     else if(view==View::SECTION)changeView(View::HOME);
     else{changeView(View::SECTION);}
@@ -1468,6 +1799,44 @@ void handleInput(){
       paint();
     }
     return;
+  }
+  if(view==View::VOICE_ERROR){
+    if(k.enter){recordVoice();return;}
+    return;
+  }
+  if(view==View::VOICE_UPLOADING){
+    if(escPressed){changeView(View::VOICE_RESULT);return;}
+    return;
+  }
+  if(view==View::VOICE_RESULT){
+    if(k.enter){changeView(View::SECTION);return;}
+    if(escPressed){voiceChoice=0;changeView(View::VOICE_READY);return;}
+    return;
+  }
+  if(view==View::SEND_CONFIRM){
+    if(k.enter){sendText();return;}
+    return;
+  }
+  if(view==View::SEND_PROGRESS){
+    if(escPressed){changeView(View::SECTION);return;}
+    return;
+  }
+  if(view==View::SEND_RESULT){
+    if(k.enter){changeView(View::SECTION);return;}
+    if(escPressed){changeView(editor.isEmpty()?View::SECTION:View::COMPOSE);return;}
+    return;
+  }
+  if(view==View::VOICE_READY){
+    bool moved=false;
+    if(upPressed){voiceChoice=(voiceChoice+3)%4;moved=true;}
+    if(downPressed){voiceChoice=(voiceChoice+1)%4;moved=true;}
+    if(choose){
+      if(voiceChoice==0){uploadVoice();return;}
+      if(voiceChoice==1){playArchiveWav(TX_AUDIO);paint();return;}
+      if(voiceChoice==2){recordVoice(true);return;}
+      changeView(View::SECTION);return;
+    }
+    if(moved)paint();return;
   }
   if(view==View::VOICE_ARCHIVE){
     if(voiceCount){
@@ -1606,7 +1975,10 @@ void handleInput(){
           recipient=input;serverReady=false;setStatus("Correspondant sauvegarde");
           changeView(View::CONFIG);return;}
       }
-      if(view==View::COMPOSE){sendText();return;}
+      if(view==View::COMPOSE){
+        if(editor.isEmpty()){setStatus("Message vide");paint();return;}
+        changeView(View::SEND_CONFIRM);return;
+      }
     }
     if(edited || k.enter)paint();return;
   }
@@ -1627,7 +1999,7 @@ void handleInput(){
     if(changed||leftPressed||rightPressed)paint();return;
   }
   if(view==View::SENT){if(choose)refreshSent();return;}
-  if(view==View::DIAG){if(choose){serverTest();paint();}return;}
+  if(view==View::DIAG){if(choose){lastCheck=0;setStatus("Test HTTPS programme");scheduleNetworkPoll();paint();}return;}
 }
 } // namespace
 void setup(){
@@ -1643,7 +2015,12 @@ void setup(){
 void loop(){
  M5Cardputer.update();handleInput();
  serviceWifiScan();servicePendingWifi();flushDraftIfDue();
- serviceNetworkReplies();
+ serviceNetworkReplies();tryStartTextSend();tryStartVoiceUpload();
+ if(voiceRecordQueued && !netWorkerBusy && !textSendQueued && !voiceUploadQueued){
+   const bool replaceOld=voiceRecordReplace;voiceRecordQueued=false;
+   recordVoice(replaceOld);
+ }
+ tryStartOutbox();
  const uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
@@ -1652,9 +2029,12 @@ void loop(){
      lastWifiAttempt=now;WiFi.reconnect();
    }
  }else if(now-lastCheck>12000){
-   lastCheck=now;
-   // Queue HTTPS on a separate FreeRTOS task; the keyboard always keeps running.
-   scheduleNetworkPoll();
+   // Do not start lengthy background HTTPS polls while the user is composing.
+   if(view!=View::COMPOSE && view!=View::SEND_CONFIRM &&
+      view!=View::VOICE_READY && view!=View::VOICE_RECORDING &&
+       view!=View::VOICE_ERROR && !(view==View::SECTION && homeIndex==1)){
+     lastCheck=now; scheduleNetworkPoll();
+   }
  }
  delay(10);
 }
