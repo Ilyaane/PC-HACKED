@@ -70,7 +70,7 @@ int batteryVoltageSmooth=-1;
 int batteryLevelSmooth=-1;
 uint32_t batterySampleAt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, VOICE_READY, VOICE_RECORDING, VOICE_UPLOADING, VOICE_RESULT, SEND_CONFIRM, SEND_PROGRESS, SEND_RESULT, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, VOICE_READY, VOICE_RECORDING, VOICE_ERROR, VOICE_UPLOADING, VOICE_RESULT, SEND_CONFIRM, SEND_PROGRESS, SEND_RESULT, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
@@ -329,6 +329,13 @@ void paint(){
      shown.length()>60?shown.substring(60,90):"",
      shown.length()>90?shown.substring(90):"",
      "OPT: retour");break;}
+ case View::VOICE_ERROR:
+   drawLines("VOCAL : DIAGNOSTIC",
+      clipped(statusLine,35),
+      "1. Verifier la carte microSD",
+      "2. Micro ADV : codec ES8311",
+      "ENTREE : nouvel essai",
+      "OPT : retour au menu");break;
  case View::VOICE_UPLOADING:
    drawLines("ENVOI DU VOCAL",
      "Transfert WAV securise",
@@ -1203,7 +1210,7 @@ void writeWavHeader(File& f,uint32_t samples){
   writeLE32(f,AUDIO_RATE*2);writeLE16(f,2);writeLE16(f,16);f.write((const uint8_t*)"data",4);writeLE32(f,bytes);
 }
 void recordVoice(bool replaceOld=false){
-  if(!sdReady){setStatus("Carte microSD absente : vocal impossible");paint();return;}
+  if(!sdReady){setStatus("Carte microSD absente : vocal impossible");changeView(View::VOICE_ERROR);return;}
   // An earlier recording must remain available until the user chooses to replace it.
   if(!replaceOld && SD.exists(TX_AUDIO)){
     voiceChoice=0;setStatus("Brouillon vocal present : choisir une action");
@@ -1214,15 +1221,15 @@ void recordVoice(bool replaceOld=false){
   }
   SD.remove(NEW_TX_AUDIO);
   File f=SD.open(NEW_TX_AUDIO,FILE_WRITE);
-  if(!f){setStatus("Impossible de creer WAV sur microSD");paint();return;}
+  if(!f){setStatus("Impossible de creer WAV sur microSD");changeView(View::VOICE_ERROR);return;}
   writeWavHeader(f,AUDIO_FRAME*AUDIO_FRAMES);
   if(f.position()!=44){
-    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Erreur entete WAV : SD");paint();return;
+    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Erreur entete WAV : SD");changeView(View::VOICE_ERROR);return;
   }
   M5Cardputer.Speaker.end(); // exclusive I2S with microphone in M5Unified
   M5Cardputer.Mic.end(); // clear any interrupted capture from a previous attempt
   if(!M5Cardputer.Mic.begin()){
-    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Micro ES8311 non initialise");paint();return;
+    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Micro ES8311 non initialise");changeView(View::VOICE_ERROR);return;
   }
   voiceRecordedSamples=0;changeView(View::VOICE_RECORDING);
   delay(1150); // ES8311 ADC analog warm-up, not a UI/network wait
@@ -1255,24 +1262,24 @@ void recordVoice(bool replaceOld=false){
     if(cancelled)setStatus("Enregistrement annule : ancien vocal conserve");
     else if(allZero && !failed)setStatus("Micro muet : verifier codec ES8311");
     else if(!failed)setStatus("Enregistrement incomplet");
-    paint();return;
+    changeView(View::VOICE_ERROR);return;
   }
   File verify=SD.open(NEW_TX_AUDIO,FILE_READ);
   const bool valid=verify && verify.size()==44+2*samples;
   if(verify)verify.close();
   if(!valid){
-    SD.remove(NEW_TX_AUDIO);setStatus("MicroSD : fichier WAV incomplet");paint();return;
+    SD.remove(NEW_TX_AUDIO);setStatus("MicroSD : fichier WAV incomplet");changeView(View::VOICE_ERROR);return;
   }
   // Transactional replacement: preserve the old voice until the new one is valid.
   SD.remove(OLD_TX_AUDIO);
   const bool hadOld=SD.exists(TX_AUDIO);
   if(hadOld && !SD.rename(TX_AUDIO,OLD_TX_AUDIO)){
-    SD.remove(NEW_TX_AUDIO);setStatus("Impossible de proteger l'ancien vocal");paint();return;
+    SD.remove(NEW_TX_AUDIO);setStatus("Impossible de proteger l'ancien vocal");changeView(View::VOICE_ERROR);return;
   }
   if(!SD.rename(NEW_TX_AUDIO,TX_AUDIO)){
     if(hadOld)SD.rename(OLD_TX_AUDIO,TX_AUDIO);
     SD.remove(NEW_TX_AUDIO);
-    setStatus("Impossible de finaliser WAV, ancien conserve");paint();return;
+    setStatus("Impossible de finaliser WAV, ancien conserve");changeView(View::VOICE_ERROR);return;
   }
   if(hadOld)SD.remove(OLD_TX_AUDIO);
   pendingVoiceId=nonce();
@@ -1677,6 +1684,7 @@ void handleInput(){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
     else if(view==View::SEARCH_VIEW)changeView(View::SEARCH_RESULTS);
+    else if(view==View::VOICE_ERROR)changeView(View::SECTION);
     else if(view==View::VOICE_UPLOADING)changeView(View::VOICE_RESULT);
     else if(view==View::VOICE_RESULT)changeView(View::VOICE_READY);
     else if(view==View::SEND_CONFIRM)changeView(View::COMPOSE);
@@ -1717,6 +1725,10 @@ void handleInput(){
         setStatus(morseQuizAnswer==String(morseQuizLetter)?"Bonne reponse !":"Essaye encore / nouvelle lettre");}
       paint();
     }
+    return;
+  }
+  if(view==View::VOICE_ERROR){
+    if(k.enter){recordVoice();return;}
     return;
   }
   if(view==View::VOICE_UPLOADING){
