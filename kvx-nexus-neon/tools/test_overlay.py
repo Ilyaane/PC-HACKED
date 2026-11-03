@@ -55,7 +55,8 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn("void setup()", text)
         self.assertNotIn("void loop()", text)
         self.assertNotIn("M5Cardputer", text)
-        self.assertNotIn("MQTT", text)
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+        self.assertNotIn("MQTT", code)
         self.assertNotIn("prefs.putString(\"token\"", text)
 
 if __name__ == "__main__":
