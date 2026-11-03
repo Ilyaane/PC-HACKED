@@ -44,7 +44,7 @@ uint32_t pendingReadId=0, draftChangedAt=0;
 bool draftDirty=false, wifiScanPending=false;
 uint32_t wifiScanStartedAt=0, wifiAttemptStartedAt=0;
 struct NetRequest {
- enum class Kind { POLL, SEND_TEXT };
+ enum class Kind { POLL, SEND_TEXT, SEND_VOICE };
  Kind kind=Kind::POLL;
  String url,token,recipient,payload,text,clientId;
  uint32_t cursor=0,readId=0;
@@ -56,7 +56,7 @@ struct NetReply {
  uint32_t readId=0;
 };
 QueueHandle_t netReplyQueue=nullptr;
-bool netWorkerBusy=false,textSendQueued=false;
+bool netWorkerBusy=false,textSendQueued=false,voiceUploadQueued=false,voiceUploadBusy=false;
 enum class WifiAttempt { NONE, BOOT, USER };
 WifiAttempt wifiAttempt=WifiAttempt::NONE;
 int bootWifiSlot=0;
@@ -70,7 +70,7 @@ int batteryVoltageSmooth=-1;
 int batteryLevelSmooth=-1;
 uint32_t batterySampleAt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, VOICE_READY, VOICE_RECORDING, SEND_CONFIRM, SEND_PROGRESS, SEND_RESULT, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, VOICE_READY, VOICE_RECORDING, VOICE_UPLOADING, VOICE_RESULT, SEND_CONFIRM, SEND_PROGRESS, SEND_RESULT, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
@@ -329,6 +329,17 @@ void paint(){
      shown.length()>60?shown.substring(60,90):"",
      shown.length()>90?shown.substring(90):"",
      "OPT: retour");break;}
+ case View::VOICE_UPLOADING:
+   drawLines("ENVOI DU VOCAL",
+     "Transfert WAV securise",
+     "Wi-Fi et serveur NEXUS",
+     "Vocal conserve jusqu'a confirmation",
+     "OPT : quitter l'affichage");break;
+ case View::VOICE_RESULT:
+   drawLines("RESULTAT DU VOCAL",
+     clipped(statusLine,35),
+     "ENTREE : menu vocaux",
+     "OPT : brouillon vocal");break;
  case View::VOICE_READY: {
    if(!sdReady || !SD.exists(TX_AUDIO)){
      drawLines("VOCAL NON DISPONIBLE","Aucun brouillon sur microSD","Retour : OPT");
@@ -1013,6 +1024,24 @@ void nexusNetworkWorker(void* argument){
           reply->sendResponse=http.getString();
         http.end();
       }
+    }else if(request->kind==NetRequest::Kind::SEND_VOICE){
+      File f=SD.open(TX_AUDIO,FILE_READ);
+      if(f && f.size()>=44 && f.size()<=MAX_VOICE){
+        WiFiClientSecure client;HTTPClient http;
+        client.setCACert(NEXUS_TRUSTED_ROOTS);client.setTimeout(8000);
+        http.setConnectTimeout(5000);http.setTimeout(8000);
+        if(http.begin(client,request->url+"/voice/"+request->recipient)){
+          http.addHeader("Authorization","Bearer "+request->token);
+          http.addHeader("X-Nexus-User",request->recipient=="bob"?"alice":"bob");
+          http.addHeader("Content-Type","audio/wav");
+          http.addHeader("X-Client-Id",request->clientId);
+          reply->sendCode=http.sendRequest("POST",&f,f.size());
+          if(reply->sendCode>=200&&reply->sendCode<300&&http.getSize()<=2048)
+            reply->sendResponse=http.getString();
+          http.end();
+        }
+      }else reply->sendCode=-90; // missing or invalid local WAV
+      if(f)f.close();
     }else{
       networkCall("/session",reply->sessionCode,&reply->session);
       if(reply->sessionCode==200){
@@ -1033,6 +1062,22 @@ void serviceNetworkReplies(){
   if(xQueueReceive(netReplyQueue,&reply,0)!=pdTRUE)return;
   netWorkerBusy=false;
   if(!reply)return;
+  if(reply->kind==NetRequest::Kind::SEND_VOICE){
+    voiceUploadBusy=false;
+    JsonDocument response;
+    const bool confirmed=reply->sendCode>=200 && reply->sendCode<300 &&
+        !deserializeJson(response,reply->sendResponse) && (response["id"]|0u)>0;
+    if(confirmed && pendingVoiceId==reply->clientId){
+      // Acknowledged: only now discard the sent WAV.
+      pendingVoiceId="";if(prefsReady)prefs.remove("vocid");
+      bool removed=sdReady && SD.remove(TX_AUDIO);
+      setStatus(removed?"Vocal envoye et confirme":"Vocal envoye, WAV a supprimer");
+    }else{
+      setStatus("Vocal non confirme (HTTP "+String(reply->sendCode)+") : conserve");
+    }
+    if(view==View::VOICE_UPLOADING)changeView(View::VOICE_RESULT);
+    delete reply;return;
+  }
   if(reply->kind==NetRequest::Kind::SEND_TEXT){
     JsonDocument response;
     const bool received=reply->sendCode>=200 && reply->sendCode<300 &&
@@ -1067,7 +1112,7 @@ void serviceNetworkReplies(){
   delete reply;
 }
 void scheduleNetworkPoll(){
-  if(netWorkerBusy || textSendQueued || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
+  if(netWorkerBusy || textSendQueued || voiceUploadQueued || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
      !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
   if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
   NetRequest* request=new NetRequest();
@@ -1240,24 +1285,50 @@ void recordVoice(bool replaceOld=false){
   voiceChoice=0;changeView(View::VOICE_READY);
 }
 void uploadVoice(){
-  if(!sdReady){setStatus("MicroSD requise");paint();return;}
-  File f=SD.open(TX_AUDIO,FILE_READ);if(!f){setStatus("Enregistrer d'abord (V)");paint();return;}
-  if(f.size()<44||f.size()>MAX_VOICE){f.close();setStatus("WAV trop volumineux");paint();return;}
-  if(pendingVoiceId.isEmpty()){pendingVoiceId=nonce();prefs.putString("vocid",pendingVoiceId);}
-  WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/voice/"+recipient)){f.close();return;}
-  http.addHeader("Content-Type","audio/wav");http.addHeader("X-Client-Id",pendingVoiceId);
-  setStatus("Envoi vocal en cours...");paint();
-  int code=http.sendRequest("POST",&f,f.size());http.end();f.close();
-  if(code>=200&&code<300){
-    // Confirmed upload: do not allow the same WAV to be sent again with a fresh id.
-    pendingVoiceId="";prefs.remove("vocid");
-    const bool deleted=SD.remove(TX_AUDIO);
-    setStatus(deleted?"Vocal envoye":"Vocal envoye (effacer WAV: Z)");
+  if(!sdReady){setStatus("MicroSD requise pour envoyer un vocal");paint();return;}
+  if(textSendQueued || voiceUploadQueued || voiceUploadBusy){
+    setStatus("Un transfert est deja en cours");paint();return;
   }
-  else setStatus("Vocal en attente (U): "+String(code));
-  paint();
+  File f=SD.open(TX_AUDIO,FILE_READ);
+  if(!f){setStatus("Enregistre un vocal avant de l'envoyer");paint();return;}
+  const size_t length=f.size();f.close();
+  if(length<44 || length>MAX_VOICE || !wavFileValid(TX_AUDIO)){
+    setStatus("Brouillon WAV absent ou invalide");paint();return;
+  }
+  if(!configured() || WiFi.status()!=WL_CONNECTED){
+    setStatus("Wi-Fi/HTTPS indisponible : vocal conserve");paint();return;
+  }
+  if(pendingVoiceId.isEmpty()){
+    const String id=nonce();
+    if(!prefsReady){setStatus("NVS indisponible : vocal conserve");paint();return;}
+    prefs.putString("vocid",id);
+    if(prefs.getString("vocid","")!=id){
+      storageFault=true;setStatus("NVS pleine : vocal conserve");paint();return;
+    }
+    pendingVoiceId=id;
+  }
+  voiceUploadQueued=true;
+  setStatus("Transfert vocal programme...");
+  changeView(View::VOICE_UPLOADING);
 }
+void tryStartVoiceUpload(){
+  if(!voiceUploadQueued || netWorkerBusy)return;
+  voiceUploadQueued=false;
+  if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi perdu : vocal conserve");changeView(View::VOICE_RESULT);return;}
+  if(ESP.getFreeHeap()<35000){setStatus("RAM faible : vocal conserve");changeView(View::VOICE_RESULT);return;}
+  NetRequest* request=new NetRequest();
+  if(!request){setStatus("Memoire insuffisante");changeView(View::VOICE_RESULT);return;}
+  request->kind=NetRequest::Kind::SEND_VOICE;
+  request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
+  request->clientId=pendingVoiceId;
+  netWorkerBusy=true;voiceUploadBusy=true;
+  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_voice_tx",12288,request,1,nullptr,0)!=pdPASS){
+    voiceUploadBusy=false;netWorkerBusy=false;delete request;
+    setStatus("Tache HTTPS indisponible : vocal conserve");
+    changeView(View::VOICE_RESULT);
+  }
+}
+
 void downloadVoice(){
   if(!sdReady||!lastVoiceId){setStatus("Pas de microSD ou vocal");paint();return;}
   WiFiClientSecure client;HTTPClient http;
@@ -1564,6 +1635,16 @@ void openSectionSelection(){
 }
 
 void handleInput(){
+  // The HTTPS voice worker owns the microSD while streaming. Block other
+  // SD and audio actions, but allow a visual return with OPT.
+  if(voiceUploadBusy || voiceUploadQueued){
+    M5Cardputer.Keyboard.isPressed();
+    if(M5Cardputer.Keyboard.isPressed() && M5Cardputer.Keyboard.keysState().opt &&
+       view!=View::VOICE_RESULT && view!=View::SECTION){
+      changeView(View::VOICE_RESULT);
+    }
+    return;
+  }
   // In menus the physical ; . , / keys work as arrows WITHOUT Fn.
   // Text/password editors retain their normal punctuation keys.
   // Fn+arrows remain supported. Change detection includes direction keys.
@@ -1596,6 +1677,8 @@ void handleInput(){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
     else if(view==View::SEARCH_VIEW)changeView(View::SEARCH_RESULTS);
+    else if(view==View::VOICE_UPLOADING)changeView(View::VOICE_RESULT);
+    else if(view==View::VOICE_RESULT)changeView(View::VOICE_READY);
     else if(view==View::SEND_CONFIRM)changeView(View::COMPOSE);
     else if(view==View::SEND_PROGRESS)changeView(View::SECTION);
     else if(view==View::SEND_RESULT)changeView(editor.isEmpty()?View::SECTION:View::COMPOSE);
@@ -1634,6 +1717,15 @@ void handleInput(){
         setStatus(morseQuizAnswer==String(morseQuizLetter)?"Bonne reponse !":"Essaye encore / nouvelle lettre");}
       paint();
     }
+    return;
+  }
+  if(view==View::VOICE_UPLOADING){
+    if(escPressed){changeView(View::VOICE_RESULT);return;}
+    return;
+  }
+  if(view==View::VOICE_RESULT){
+    if(k.enter){changeView(View::SECTION);return;}
+    if(escPressed){voiceChoice=0;changeView(View::VOICE_READY);return;}
     return;
   }
   if(view==View::SEND_CONFIRM){
@@ -1838,7 +1930,7 @@ void setup(){
 void loop(){
  M5Cardputer.update();handleInput();
  serviceWifiScan();servicePendingWifi();flushDraftIfDue();
- serviceNetworkReplies();tryStartTextSend();
+ serviceNetworkReplies();tryStartTextSend();tryStartVoiceUpload();
  const uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
