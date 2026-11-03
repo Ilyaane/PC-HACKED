@@ -44,19 +44,19 @@ uint32_t pendingReadId=0, draftChangedAt=0;
 bool draftDirty=false, wifiScanPending=false;
 uint32_t wifiScanStartedAt=0, wifiAttemptStartedAt=0;
 struct NetRequest {
- enum class Kind { POLL, SEND_TEXT, SEND_VOICE };
+ enum class Kind { POLL, SEND_TEXT, SEND_VOICE, OUTBOX };
  Kind kind=Kind::POLL;
  String url,token,recipient,payload,text,clientId;
  uint32_t cursor=0,readId=0;
 };
 struct NetReply {
  NetRequest::Kind kind=NetRequest::Kind::POLL;
- int sessionCode=-1,inboxCode=-1,unreadCode=-1,readCode=-1,sendCode=-1;
- String session,inbox,unread,sendResponse,clientId,sentText,recipient;
+ int sessionCode=-1,inboxCode=-1,unreadCode=-1,readCode=-1,sendCode=-1,outboxCode=-1;
+ String session,inbox,unread,sendResponse,clientId,sentText,recipient,outboxPayload;
  uint32_t readId=0;
 };
 QueueHandle_t netReplyQueue=nullptr;
-bool netWorkerBusy=false,textSendQueued=false,textSending=false,voiceUploadQueued=false,voiceUploadBusy=false;
+bool netWorkerBusy=false,textSendQueued=false,textSending=false,voiceUploadQueued=false,voiceUploadBusy=false,outboxQueued=false;
 String outgoingText,outgoingRecipient,outgoingId;
 enum class WifiAttempt { NONE, BOOT, USER };
 WifiAttempt wifiAttempt=WifiAttempt::NONE;
@@ -1059,6 +1059,8 @@ void nexusNetworkWorker(void* argument){
         }
       }else reply->sendCode=-90; // missing or invalid local WAV
       if(f)f.close();
+    }else if(request->kind==NetRequest::Kind::OUTBOX){
+      networkCall("/outbox?after=0",reply->outboxCode,&reply->outboxPayload);
     }else{
       networkCall("/session",reply->sessionCode,&reply->session);
       if(reply->sessionCode==200){
@@ -1079,6 +1081,25 @@ void serviceNetworkReplies(){
   if(xQueueReceive(netReplyQueue,&reply,0)!=pdTRUE)return;
   netWorkerBusy=false;
   if(!reply)return;
+  if(reply->kind==NetRequest::Kind::OUTBOX){
+    JsonDocument doc;
+    if(reply->outboxCode==200 && !deserializeJson(doc,reply->outboxPayload)){
+      JsonArray messages=doc["messages"].as<JsonArray>();
+      if(messages.size()==0)lastSentInfo="Aucun message envoye";
+      else {
+        JsonObject newest=messages[0].as<JsonObject>();
+        const String peer=newest["recipient"]|"?", kind=newest["kind"]|"?";
+        const bool read=(newest["read"]|0)==1;
+        lastSentInfo="Vers "+peer+" / "+kind+(read?" / LU":" / non lu");
+      }
+      setStatus("Messages envoyes actualises");
+    }else{
+      lastSentInfo="Serveur inaccessible (HTTP "+String(reply->outboxCode)+")";
+      setStatus("Messages envoyes : erreur reseau");
+    }
+    if(view==View::SENT)paint();
+    delete reply;return;
+  }
   if(reply->kind==NetRequest::Kind::SEND_VOICE){
     voiceUploadBusy=false;
     JsonDocument response;
@@ -1130,7 +1151,7 @@ void serviceNetworkReplies(){
   delete reply;
 }
 void scheduleNetworkPoll(){
-  if(netWorkerBusy || textSendQueued || voiceUploadQueued || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
+  if(netWorkerBusy || textSendQueued || voiceUploadQueued || outboxQueued || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
      !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
   if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
   NetRequest* request=new NetRequest();
@@ -1144,25 +1165,27 @@ void scheduleNetworkPoll(){
   }
 }
 void refreshSent(){
-  if(!configured()) {setStatus("Configurer serveur et jeton");paint();return;}
-  WiFiClientSecure client;HTTPClient http;
-  if(!openHttp(http,client,"/outbox?after=0")){paint();return;}
-  const int code=http.GET();
-  String body=code==200 ? http.getString() : "";
-  http.end();
-  if(code!=200){setStatus("Boite envoi HTTP "+String(code));paint();return;}
-  JsonDocument doc;
-  if(deserializeJson(doc,body)){setStatus("Reponse serveur invalide");paint();return;}
-  JsonArray list=doc["messages"].as<JsonArray>();
-  if(list.size()==0){lastSentInfo="Aucun message envoye";}
-  else {
-    JsonObject last=list[0].as<JsonObject>();
-    String peer=last["recipient"]|"?",kind=last["kind"]|"?";
-    bool read=(last["read"]|0)==1;
-    lastSentInfo=String("Vers ")+peer+" / "+kind+(read?" / LU":" / non lu");
+  if(!configured() || WiFi.status()!=WL_CONNECTED){
+    lastSentInfo="Wi-Fi ou serveur non configure";
+    setStatus("Liste envoyes indisponible");paint();return;
   }
+  outboxQueued=true;
+  lastSentInfo="Chargement des messages envoyes...";
   paint();
 }
+void tryStartOutbox(){
+  if(!outboxQueued || netWorkerBusy || textSendQueued || voiceUploadQueued)return;
+  outboxQueued=false;
+  NetRequest* request=new NetRequest();
+  if(!request){setStatus("RAM insuffisante pour la liste");return;}
+  request->kind=NetRequest::Kind::OUTBOX;
+  request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
+  netWorkerBusy=true;
+  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_sent",12288,request,1,nullptr,0)!=pdPASS){
+    netWorkerBusy=false;delete request;setStatus("Echec creation de la tache HTTPS");
+  }
+}
+
 void acknowledgeMessage(uint32_t id){
   if(!id || !configured() || WiFi.status()!=WL_CONNECTED)return;
   WiFiClientSecure client;HTTPClient http;
@@ -1942,7 +1965,7 @@ void handleInput(){
     if(changed||leftPressed||rightPressed)paint();return;
   }
   if(view==View::SENT){if(choose)refreshSent();return;}
-  if(view==View::DIAG){if(choose){serverTest();paint();}return;}
+  if(view==View::DIAG){if(choose){lastCheck=0;setStatus("Test HTTPS programme");scheduleNetworkPoll();paint();}return;}
 }
 } // namespace
 void setup(){
@@ -1958,7 +1981,7 @@ void setup(){
 void loop(){
  M5Cardputer.update();handleInput();
  serviceWifiScan();servicePendingWifi();flushDraftIfDue();
- serviceNetworkReplies();tryStartTextSend();tryStartVoiceUpload();
+ serviceNetworkReplies();tryStartTextSend();tryStartVoiceUpload();tryStartOutbox();
  const uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
