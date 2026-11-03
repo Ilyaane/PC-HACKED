@@ -1,0 +1,57 @@
+name: Nexus Neon - six ADV images
+on:
+  push:
+    branches: [nexus-neon-six-variants-20261103]
+    paths:
+      - 'nexus-adv/**'
+      - '.github/workflows/nexus-neon-six.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Test and compile six images
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      NEXUS_SHARED_TOKEN: ${{ secrets.NEXUS_SHARED_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Server protocol regression suite
+        run: node --test nexus-adv/cloudflare/tests/worker.test.mjs
+      - name: Source invariant suite
+        run: python nexus-adv/tests/static_checks.py
+      - name: Set up PlatformIO
+        run: python -m pip install 'platformio==6.1.18'
+      - name: Compile each independent feature profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          for profile in morse-voice voice text; do
+            echo "::group::Build $profile"
+            python nexus-adv/tools/neon_build.py prepare "$profile"
+            (cd nexus-adv/firmware && pio run -e cardputer-adv -t clean && pio run -e cardputer-adv)
+            python "$HOME/.platformio/packages/tool-esptoolpy/esptool.py" --chip esp32s3 merge_bin \
+              -o nexus-adv/firmware/.pio/build/cardputer-adv/NEXUS_ADV_full_flash_0x0.bin \
+              --flash_mode qio --flash_freq 80m --flash_size 8MB \
+              0x0 nexus-adv/firmware/.pio/build/cardputer-adv/bootloader.bin \
+              0x8000 nexus-adv/firmware/.pio/build/cardputer-adv/partitions.bin \
+              0xe000 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin" \
+              0x10000 nexus-adv/firmware/.pio/build/cardputer-adv/firmware.bin
+            python nexus-adv/tools/neon_build.py collect "$profile"
+            echo "::endgroup::"
+          done
+      - name: Package and verify the six binaries and ZIP CRC
+        run: python nexus-adv/tools/neon_build.py package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Nexus-Neon-six-tested-ESP32-images
+          path: nexus-adv/dist/Nexus_Néon_6_Firmwares.zip
+          if-no-files-found: error
+          retention-days: 14
