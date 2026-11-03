@@ -1,0 +1,50 @@
+name: KVXputer Nexus Neon native integration tests
+on:
+  push:
+    branches:
+      - kvx-nexus-neon-text-integration-20261103
+    paths:
+      - 'kvx-nexus-neon/**'
+      - '.github/workflows/kvx-nexus-neon.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate integration contract and repeatable install
+        run: python kvx-nexus-neon/tools/test_overlay.py
+      - name: Verify Cloudflare Worker API contract
+        working-directory: nexus-adv/cloudflare
+        run: npm test
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned KVXputer version
+        run: |
+          git clone --depth 1 https://github.com/kvx17/kvxputer.git kvxputer
+          if [ "$(git -C kvxputer rev-parse HEAD)" != "c2ff56f154c35eb13fcfab845fb30dcecf372449" ]; then
+            git -C kvxputer fetch --depth 1 origin c2ff56f154c35eb13fcfab845fb30dcecf372449
+            git -C kvxputer checkout --detach c2ff56f154c35eb13fcfab845fb30dcecf372449
+          fi
+          test "$(git -C kvxputer rev-parse HEAD)" = "c2ff56f154c35eb13fcfab845fb30dcecf372449"
+      - name: Install Nexus native module and transient server config
+        env:
+          NEXUS_SHARED_TOKEN: ${{ secrets.NEXUS_SHARED_TOKEN }}
+        run: python kvx-nexus-neon/tools/install_overlay.py --kvx kvxputer --nexus .
+      - name: Install PlatformIO
+        run: python -m pip install --disable-pip-version-check platformio
+      - name: Clean-build full KVXputer Cardputer ADV
+        working-directory: kvxputer
+        run: pio run -e m5stack-cardputer
+      - name: Validate app image against partition table
+        run: python kvx-nexus-neon/tools/verify_build.py kvxputer
+      # No upload-artifact: a firmware containing a compiled shared token
+      # must not be published from a public GitHub Actions run.
