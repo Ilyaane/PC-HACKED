@@ -587,8 +587,17 @@ bool remember(uint32_t id,String sender,String kind,String text){
 }
 void initSd(){
   SPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS);
-  sdReady=SD.begin(SD_CS,SPI,20000000);
-  if(sdReady){historySize=0;loadHistory();}
+  sdReady=SD.begin(SD_CS,SPI,12000000);
+  if(!sdReady){SD.end();sdReady=SD.begin(SD_CS,SPI,4000000);}
+  if(sdReady){
+    // Recover from an interrupted transactional voice replacement.
+    if(SD.exists(OLD_TX_AUDIO) && !SD.exists(TX_AUDIO))
+      SD.rename(OLD_TX_AUDIO,TX_AUDIO);
+    if(SD.exists(OLD_TX_AUDIO) && SD.exists(TX_AUDIO))
+      SD.remove(OLD_TX_AUDIO);
+    if(SD.exists(NEW_TX_AUDIO))SD.remove(NEW_TX_AUDIO);
+    historySize=0;loadHistory();
+  }
   else{historySize=0;cursor=0;} // No persistent journal: fetch from server on boot.
 }
 bool timeReady(){
@@ -1305,14 +1314,14 @@ void uploadVoice(){
   if(!configured() || WiFi.status()!=WL_CONNECTED){
     setStatus("Wi-Fi/HTTPS indisponible : vocal conserve");paint();return;
   }
-  if(pendingVoiceId.isEmpty()){
-    const String id=nonce();
-    if(!prefsReady){setStatus("NVS indisponible : vocal conserve");paint();return;}
-    prefs.putString("vocid",id);
-    if(prefs.getString("vocid","")!=id){
+  if(pendingVoiceId.isEmpty())pendingVoiceId=nonce();
+  if(!prefsReady){setStatus("NVS indisponible : vocal conserve");paint();return;}
+  // Verify the idempotency key even when a previous recording created it.
+  if(prefs.getString("vocid","")!=pendingVoiceId){
+    prefs.putString("vocid",pendingVoiceId);
+    if(prefs.getString("vocid","")!=pendingVoiceId){
       storageFault=true;setStatus("NVS pleine : vocal conserve");paint();return;
     }
-    pendingVoiceId=id;
   }
   voiceUploadQueued=true;
   setStatus("Transfert vocal programme...");
