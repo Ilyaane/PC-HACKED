@@ -30,7 +30,7 @@ checks={
  'Original lightweight vector icons': 'switch(homeIndex)' in cpp and 'l.fillTriangle' in cpp and 'pushImage(' not in cpp,
  'Low tear graphics batch': 'display.startWrite();' in cpp and 'display.endWrite();' in cpp,
  'Batch NVS cursor': 'cursor!=oldCursor' in cpp and 'lastVoiceId!=oldVoiceId' in cpp,
- 'Do not poll while WiFi scan': 'textSendQueued || voiceUploadQueued || wifiScanPending' in cpp,
+ 'Do not poll while WiFi scan': 'textSendQueued || voiceUploadQueued || outboxQueued || wifiScanPending' in cpp,
 
  'Section-based navigation': 'void openSectionSelection()' in cpp and 'case View::SECTION:' in cpp,
  'Morse code library': (root/'firmware/include/nexus_morse.h').exists(),
@@ -77,6 +77,9 @@ checks={
  'Voice send in worker': 'NetRequest::Kind::SEND_VOICE' in cpp and 'voiceUploadBusy=true' in cpp,
  'Voice upload retains WAV on failure': 'Vocal non confirme (HTTP ' in cpp,
  'Text send in worker': 'NetRequest::Kind::SEND_TEXT' in cpp and 'tryStartTextSend();' in cpp,
+ 'Sent list in worker': 'NetRequest::Kind::OUTBOX' in cpp and 'tryStartOutbox();' in cpp,
+ 'Outbox shows server status': 'Messages envoyes actualises' in cpp,
+ 'Foreground send priority': 'view!=View::COMPOSE' in cpp and 'outgoingText=editor' in cpp,
  'Text send confirmation': 'case View::SEND_CONFIRM:' in cpp and 'case View::SEND_PROGRESS:' in cpp,
  'Text send idempotency': 'pendingTextId=id;' in cpp and 'prefs.getString("txtid","")!=id' in cpp,
  'SD clock retry': 'SD.begin(SD_CS,SPI,4000000)' in cpp,
