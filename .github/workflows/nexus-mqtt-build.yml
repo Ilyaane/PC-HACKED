@@ -24,11 +24,26 @@ jobs:
           python-version: '3.11'
       - name: Install PlatformIO
         run: python -m pip install --upgrade platformio
-      - name: Extract versioned standalone source
+      - name: Extract source and apply verified No-NVS patch
         run: |
           mkdir -p /tmp/nexus-mqtt-build
           base64 -d nexus-mqtt/firmware_source.tar.gz.b64 | tar -xz -C /tmp/nexus-mqtt-build
-          test -s /tmp/nexus-mqtt-build/firmware/src/main.cpp
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib
+          p=Path('/tmp/nexus-mqtt-build/firmware/src/main.cpp')
+          src=p.read_text()
+          old='// NEXUS MQTT 0.2 - Standalone original color UI for Cardputer ADV.'
+          target='  M5Cardputer.begin();M5Cardputer.Display.setRotation(1);'
+          if src.count(old)!=1 or src.count(target)!=1 or 'WiFi.persistent(false);' in src:
+              raise SystemExit('Unexpected source; abort rather than build an unverified variant')
+          src=src.replace(old,'// NEXUS MQTT 0.2.1 - Standalone original color UI with Wi-Fi NVS persistence disabled.',1)
+          src=src.replace(target, target + "\n  // Important: never let Arduino's Wi-Fi library persist station credentials.\n  // Both Wi-Fi and MQTT credentials are loaded exclusively from microSD.\n  // Call before WiFi.mode()/WiFi.begin() and before any reconnection attempt.\n  WiFi.persistent(false);",1)
+          p.write_text(src)
+          digest=hashlib.sha256(p.read_bytes()).hexdigest()
+          assert digest=='f07e79bed2db9539232a169911306863dbf39879f910b1a920c6b3dea34438e2', digest
+          print('No-NVS firmware source verified:',digest)
+          PY
       - name: Compile Cardputer ADV
         working-directory: /tmp/nexus-mqtt-build/firmware
         run: pio run -e cardputer-adv
@@ -36,11 +51,11 @@ jobs:
         run: |
           mkdir -p dist
           test -s /tmp/nexus-mqtt-build/firmware/.pio/build/cardputer-adv/firmware.bin
-          cp /tmp/nexus-mqtt-build/firmware/.pio/build/cardputer-adv/firmware.bin dist/NEXUS_MQTT_ADV_LAUNCHER_V0_2.bin
+          cp /tmp/nexus-mqtt-build/firmware/.pio/build/cardputer-adv/firmware.bin dist/NEXUS_MQTT_ADV_LAUNCHER_V0_2_1_NO_NVS.bin
           sha256sum dist/*.bin > dist/SHA256SUMS.txt
           ls -alh dist
       - uses: actions/upload-artifact@v4
         with:
-          name: nexus-mqtt-cardputer-adv-v02
+          name: nexus-mqtt-cardputer-adv-v021-no-nvs
           path: dist/
           if-no-files-found: error
