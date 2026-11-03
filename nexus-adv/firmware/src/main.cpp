@@ -14,7 +14,10 @@
 #include <SPI.h>
 #include <SD.h>
 #include "ca_roots.h"
+#include "nexus_neon_config.h"
+#if NEXUS_NEON_MORSE
 #include "nexus_morse.h"
+#endif
 #include <math.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -78,7 +81,16 @@ String input;
 String scanNames[24];
 bool scanSaved[24]={}, scanOpen[24]={};
 uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
-constexpr uint8_t HOME_COUNT=6, CONFIG_COUNT=4, WIFI_SLOTS=5;
+constexpr uint8_t HOME_COUNT=6, CONFIG_COUNT=2, WIFI_SLOTS=5;
+bool homeAllowed(uint8_t id) {
+#if !NEXUS_NEON_VOICE
+ if(id==1)return false;
+#endif
+#if !NEXUS_NEON_MORSE
+ if(id==2)return false;
+#endif
+ return true;
+}
 uint8_t sectionIndex=0, morseMode=0;
 uint8_t morseWpm=12; char morseQuizLetter='A'; bool morseQuizAnswered=false;
 String morseQuizAnswer;
@@ -238,7 +250,7 @@ void drawHome(){
   static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME","AUTRES"};
   static const char* captions[]={"Conversations","Audio et microSD",
     "Coder et decoder","Reseaux disponibles","Reglages","Archives et outils"};
-  drawBackdrop();drawStatusBar("NEXUS ADV");
+  drawBackdrop();drawStatusBar("NEXUS NEON");
   // Solid title panel and glowing navigation, similar rhythm to Bruce's carousel.
   l.fillRoundRect(38,26,164,76,11,colorMix(p.dark,0x0000,70));
   l.drawRoundRect(38,26,164,76,11,p.primary);
@@ -325,6 +337,7 @@ void paint(){
    String items[6];int count=sectionOptions(homeIndex,items);
    drawMenu(sectionTitle(homeIndex),items,count,sectionIndex);
    break;}
+#if NEXUS_NEON_MORSE
  case View::MORSE_EDIT: {
    String tail=input.length()>90?input.substring(input.length()-90):input;
    drawLines(morseMode==0?"MORSE VERS TEXTE":"MORSE EN AUDIO",
@@ -344,6 +357,8 @@ void paint(){
      shown.length()>60?shown.substring(60,90):"",
      shown.length()>90?shown.substring(90):"",
      "OPT: retour");break;}
+#endif // NEXUS_NEON_MORSE
+#if NEXUS_NEON_VOICE
  case View::VOICE_ERROR:
    drawLines("VOCAL : DIAGNOSTIC",
       clipped(statusLine,35),
@@ -387,6 +402,7 @@ void paint(){
       "OPT : annuler",
       "Patiente : capture audio");break;
  }
+#endif // NEXUS_NEON_VOICE
  case View::SEND_CONFIRM: {
    const String shown=editor.length()>92?editor.substring(0,92)+"...":editor;
    drawLines("CONFIRMER L'ENVOI",
@@ -408,6 +424,7 @@ void paint(){
       clipped(statusLine,35),
       "ENTREE : retour messages",
       "OPT : revenir au brouillon");break;
+#if NEXUS_NEON_VOICE
  case View::VOICE_ARCHIVE: {
    if(!sdReady){drawLines("ARCHIVES VOCALES","Inserer une microSD"," puis detecter microSD","OPT: retour");break;}
    if(!voiceCount){drawLines("ARCHIVES VOCALES","Aucun vocal archive","Les vocaux recus sont","sauvegardes automatiquement","OPT: retour");break;}
@@ -419,6 +436,7 @@ void paint(){
    drawMenu("VOCAL "+String(voiceSelection+1)+"/"+String(voiceCount),
             opts,voiceCount,voiceSelection);
    break;}
+#endif // NEXUS_NEON_VOICE
  case View::WIFI_CONFIRM: {
    const String opts[]={"Connecter : "+clipped(wifiSsid,23),"Choisir un autre Wi-Fi","Oublier ce reseau"};
    drawMenu("WI-FI MEMORISE",opts,3,confirmIndex);break;}
@@ -435,8 +453,7 @@ void paint(){
        shown.substring(0,31),shown.length()>31?shown.substring(31):"",
        "Entree : connecter et sauver","Fn+ESC : retour");break;}
  case View::CONFIG: {
-   const String opts[]={"Adresse HTTPS du serveur","Jeton de cet appareil",
-     "Correspondant : "+recipient,"Reseaux Wi-Fi"};
+   const String opts[]={"Correspondant : "+recipient,"Reseaux Wi-Fi"};
    drawMenu("REGLAGES NEXUS",opts,CONFIG_COUNT,configIndex);break;}
  case View::EDIT_URL: {
    const String shown=input.length()>68?input.substring(input.length()-68):input;
@@ -518,7 +535,9 @@ void paint(){
    drawLines("STOCKAGE ET VERSION","NEXUS NEON MORSE V2 BETA",free,total,
      "Code conserve en NVS", "OPT : retour");break;}
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
+#if NEXUS_NEON_VOICE
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
+ #endif // NEXUS_NEON_VOICE
  }
  display.endWrite();
 }
@@ -567,7 +586,7 @@ void loadSettings(){
   if(!prefsReady){storageFault=true;setStatus("NVS KO: verifier partition flash");return;}
   wifiSsid=prefs.getString("ssid",""); wifiPass=prefs.getString("pwd","");
   if(!wifiSsid.isEmpty() && wifiSlot(wifiSsid)<0)rememberNetwork(wifiSsid,wifiPass); // migrate old NVS
-  serverUrl=prefs.getString("server",""); deviceToken=prefs.getString("token","");
+  serverUrl=String(NEXUS_FIXED_SERVER); deviceToken=String(NEXUS_FIXED_TOKEN); // built in, not NVS
   recipient=prefs.getString("peer","bob"); editor=prefs.getString("draft","");
   unreadCount=prefs.getUInt("unread",0);unreadSynced=false;
   notificationSound=prefs.getBool("beep",true);
@@ -983,7 +1002,7 @@ void applyInboxPayload(const String& payload){
     // Failure retries on the next poll instead of silently losing the archive.
     if(sdReady){
       const uint32_t created=m["created"]|0u;
-      if(kind=="voice" && !saveVoiceArchive(id,sender,created)){
+      if(NEXUS_NEON_VOICE && kind=="voice" && !saveVoiceArchive(id,sender,created)){
         setStatus("Vocal non archive: verifier microSD / reseau");
         break;
       }
@@ -1257,6 +1276,7 @@ void tryStartTextSend(){
   }
 }
 
+#if NEXUS_NEON_VOICE
 void writeLE16(File& f,uint16_t v){uint8_t a[2]={(uint8_t)v,(uint8_t)(v>>8)};f.write(a,2);}
 void writeLE32(File& f,uint32_t v){uint8_t a[4]={(uint8_t)v,(uint8_t)(v>>8),(uint8_t)(v>>16),(uint8_t)(v>>24)};f.write(a,4);}
 void writeWavHeader(File& f,uint32_t samples){
@@ -1494,6 +1514,8 @@ void playArchiveWav(const String& path){
   f.close();M5Cardputer.Speaker.end();
   setStatus(ok?"Lecture archive terminee":"Erreur lecture microSD");paint();
 }
+#endif // NEXUS_NEON_VOICE
+#if NEXUS_NEON_MORSE
 void playMorseAudio(const String& encoded){
   if(encoded.isEmpty()){setStatus("Texte non compatible Morse");return;}
   M5Cardputer.Mic.end();M5Cardputer.Speaker.setVolume(75);
@@ -1577,6 +1599,7 @@ void decodeMorseMicrophone(){
   changeView(View::MORSE_RESULT);
 }
 
+#endif // NEXUS_NEON_MORSE
 void measureBattery(){
   // Cardputer ADV: voltage and voltage-derived percentage, not precision state-of-charge.
   int values[7],n=0;
@@ -1668,6 +1691,7 @@ void openSectionSelection(){
       case 2:changeView(View::SENT);refreshSent();break;
     }
   }else if(homeIndex==1){
+#if NEXUS_NEON_VOICE
     switch(sectionIndex){
       case 0:recordVoice();break;
       case 1:uploadVoice();break;
@@ -1675,7 +1699,9 @@ void openSectionSelection(){
       case 3:playVoice();break;
       case 4:changeView(View::DISCARD_VOICE);break;
     }
+  #endif // NEXUS_NEON_VOICE
   }else if(homeIndex==2){
+#if NEXUS_NEON_MORSE
     if(sectionIndex==2){decodeMorseMicrophone();}
     else if(sectionIndex==3){
       morseQuizLetter=(char)('A'+(esp_random()%26));
@@ -1688,6 +1714,7 @@ void openSectionSelection(){
       prefs.putUInt("morsewpm",morseWpm);
       setStatus("Morse: "+String(morseWpm)+" mots/min");paint();
     }else{morseMode=sectionIndex;input="";changeView(View::MORSE_EDIT);}
+  #endif // NEXUS_NEON_MORSE
   }else if(homeIndex==3){
     if(sectionIndex==0)wifiSetup();
     else changeView(View::DIAG);
@@ -1708,6 +1735,7 @@ void openSectionSelection(){
 }
 
 void handleInput(){
+#if NEXUS_NEON_VOICE
   if(voiceRecordQueued){
     if(M5Cardputer.Keyboard.isPressed() && M5Cardputer.Keyboard.keysState().opt){
       voiceRecordQueued=false;setStatus("Enregistrement reporte annule");
@@ -1725,6 +1753,7 @@ void handleInput(){
     }
     return;
   }
+#endif // NEXUS_NEON_VOICE
   // In menus the physical ; . , / keys work as arrows WITHOUT Fn.
   // Text/password editors retain their normal punctuation keys.
   // Fn+arrows remain supported. Change detection includes direction keys.
@@ -1773,8 +1802,8 @@ void handleInput(){
   const bool choose=k.enter||(rightPressed && view!=View::HOME);
   if(view==View::HOME){
     bool moved=false;
-    if(leftPressed){homeIndex=(homeIndex+HOME_COUNT-1)%HOME_COUNT;moved=true;}
-    if(rightPressed){homeIndex=(homeIndex+1)%HOME_COUNT;moved=true;}
+    if(leftPressed){do{homeIndex=(homeIndex+HOME_COUNT-1)%HOME_COUNT;}while(!homeAllowed(homeIndex));moved=true;}
+    if(rightPressed){do{homeIndex=(homeIndex+1)%HOME_COUNT;}while(!homeAllowed(homeIndex));moved=true;}
     if(k.enter){sectionIndex=0;changeView(View::SECTION);return;}
     if(moved)paint();return;
   }
@@ -1786,6 +1815,7 @@ void handleInput(){
     if(choose){openSectionSelection();return;}
     if(moved)paint();return;
   }
+#if NEXUS_NEON_MORSE
   if(view==View::MORSE_TRAIN){
     if(morseQuizAnswered){
       if(k.enter){morseQuizLetter=(char)('A'+(esp_random()%26));
@@ -1800,6 +1830,8 @@ void handleInput(){
     }
     return;
   }
+#endif // NEXUS_NEON_MORSE
+#if NEXUS_NEON_VOICE
   if(view==View::VOICE_ERROR){
     if(k.enter){recordVoice();return;}
     return;
@@ -1813,6 +1845,7 @@ void handleInput(){
     if(escPressed){voiceChoice=0;changeView(View::VOICE_READY);return;}
     return;
   }
+#endif // NEXUS_NEON_VOICE
   if(view==View::SEND_CONFIRM){
     if(k.enter){sendText();return;}
     return;
@@ -1826,6 +1859,7 @@ void handleInput(){
     if(escPressed){changeView(editor.isEmpty()?View::SECTION:View::COMPOSE);return;}
     return;
   }
+#if NEXUS_NEON_VOICE
   if(view==View::VOICE_READY){
     bool moved=false;
     if(upPressed){voiceChoice=(voiceChoice+3)%4;moved=true;}
@@ -1851,6 +1885,7 @@ void handleInput(){
     }
     return;
   }
+#endif // NEXUS_NEON_VOICE
   if(view==View::BATTERY_INFO){
     if(k.enter){measureBattery();paint();}
     return;
@@ -1876,10 +1911,8 @@ void handleInput(){
     if(downPressed){configIndex=(configIndex+1)%CONFIG_COUNT;moved=true;}
     if(choose){
       switch(configIndex){
-        case 0:input=serverUrl;changeView(View::EDIT_URL);return;
-        case 1:input="";changeView(View::EDIT_TOKEN);return;
-        case 2:input=recipient;changeView(View::EDIT_PEER);return;
-        case 3:wifiSetup();return;
+        case 0:input=recipient;changeView(View::EDIT_PEER);return;
+        case 1:wifiSetup();return;
       }
     }
     if(moved)paint();return;
@@ -1916,12 +1949,14 @@ void handleInput(){
     }
     return;
   }
+#if NEXUS_NEON_VOICE
   if(view==View::DISCARD_VOICE){
     if(choose){pendingVoiceId="";prefs.remove("vocid");
       if(sdReady)SD.remove(TX_AUDIO);
       setStatus("Brouillon vocal efface");changeView(View::HOME);}
     return;
   }
+#endif // NEXUS_NEON_VOICE
   if(view==View::WIFI_PASSWORD||view==View::EDIT_URL||view==View::EDIT_TOKEN||
      view==View::EDIT_PEER||view==View::COMPOSE||view==View::MORSE_EDIT||view==View::SEARCH_EDIT){
     // Fn chords do not type punctuation into passwords or drafts.
@@ -1941,6 +1976,7 @@ void handleInput(){
     }
     if(k.enter){
       if(view==View::SEARCH_EDIT){searchTextArchive();return;}
+#if NEXUS_NEON_MORSE
       if(view==View::MORSE_EDIT){
         morseOutput=NexusMorse::encode(input);
         if(morseOutput.isEmpty())morseOutput="Aucun caractere pris en charge";
@@ -1948,6 +1984,7 @@ void handleInput(){
           playMorseAudio(morseOutput);
         changeView(View::MORSE_RESULT);return;
       }
+#endif // NEXUS_NEON_MORSE
       if(view==View::WIFI_PASSWORD){storeWiFiAfterTest(input);input="";return;}
       if(view==View::EDIT_URL){
         input.trim();
@@ -1993,7 +2030,9 @@ void handleInput(){
         if(rightPressed&&textPage+1<pages)textPage++;
         if(leftPressed&&textPage>0)textPage--;
       }
+#if NEXUS_NEON_VOICE
       if(choose&&history[i].kind=="voice"){lastVoiceId=history[i].id;playVoice();}
+#endif
     }
     if(changed&&historySize)pendingReadId=history[historySize-1-pageHistory].id;
     if(changed||leftPressed||rightPressed)paint();return;
@@ -2015,11 +2054,16 @@ void setup(){
 void loop(){
  M5Cardputer.update();handleInput();
  serviceWifiScan();servicePendingWifi();flushDraftIfDue();
- serviceNetworkReplies();tryStartTextSend();tryStartVoiceUpload();
+ serviceNetworkReplies();tryStartTextSend();
+#if NEXUS_NEON_VOICE
+ tryStartVoiceUpload();
+#endif
+#if NEXUS_NEON_VOICE
  if(voiceRecordQueued && !netWorkerBusy && !textSendQueued && !voiceUploadQueued){
    const bool replaceOld=voiceRecordReplace;voiceRecordQueued=false;
    recordVoice(replaceOld);
  }
+#endif // NEXUS_NEON_VOICE
  tryStartOutbox();
  const uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
