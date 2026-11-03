@@ -20,7 +20,7 @@ jobs:
         run: python kvx-nexus-neon/tools/test_overlay.py
       - name: Verify Cloudflare Worker API contract
         working-directory: nexus-adv/cloudflare
-        run: npm test
+        run: node --test tests/worker.test.mjs
 
   build:
     runs-on: ubuntu-latest
