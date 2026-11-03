@@ -136,8 +136,7 @@ void doHttp(void *raw) {
                 http.addHeader("X-Nexus-User", ownRole(req->recipient));
                 if (req->op == Op::SEND) {
                     http.addHeader("Content-Type", "application/json");
-                    rep->code = http.POST((const uint8_t *)req->payload.c_str(),
-                                          req->payload.length());
+                    rep->code = http.POST(req->payload);
                 } else {
                     rep->code = http.GET();
                 }
