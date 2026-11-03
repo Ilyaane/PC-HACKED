@@ -56,7 +56,8 @@ struct NetReply {
  uint32_t readId=0;
 };
 QueueHandle_t netReplyQueue=nullptr;
-bool netWorkerBusy=false,textSendQueued=false,voiceUploadQueued=false,voiceUploadBusy=false;
+bool netWorkerBusy=false,textSendQueued=false,textSending=false,voiceUploadQueued=false,voiceUploadBusy=false;
+String outgoingText,outgoingRecipient,outgoingId;
 enum class WifiAttempt { NONE, BOOT, USER };
 WifiAttempt wifiAttempt=WifiAttempt::NONE;
 int bootWifiSlot=0;
@@ -1095,6 +1096,7 @@ void serviceNetworkReplies(){
     delete reply;return;
   }
   if(reply->kind==NetRequest::Kind::SEND_TEXT){
+    textSending=false;
     JsonDocument response;
     const bool received=reply->sendCode>=200 && reply->sendCode<300 &&
         !deserializeJson(response,reply->sendResponse) && (response["id"]|0u)>0;
@@ -1187,6 +1189,7 @@ void sendText(){
     }
     pendingTextId=id;
   }
+  outgoingText=editor;outgoingRecipient=recipient;outgoingId=pendingTextId;
   textSendQueued=true;
   setStatus("Envoi HTTPS en cours...");
   changeView(View::SEND_PROGRESS);
@@ -1198,13 +1201,13 @@ void tryStartTextSend(){
   NetRequest* request=new NetRequest();
   if(!request){textSendQueued=false;setStatus("Memoire indisponible");changeView(View::SEND_RESULT);return;}
   request->kind=NetRequest::Kind::SEND_TEXT;
-  request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
-  request->text=editor;request->clientId=pendingTextId;
-  JsonDocument payload;payload["to"]=recipient;payload["text"]=editor;payload["client_id"]=pendingTextId;
+  request->url=serverUrl;request->token=deviceToken;request->recipient=outgoingRecipient;
+  request->text=outgoingText;request->clientId=outgoingId;
+  JsonDocument payload;payload["to"]=outgoingRecipient;payload["text"]=outgoingText;payload["client_id"]=outgoingId;
   serializeJson(payload,request->payload);
-  netWorkerBusy=true;textSendQueued=false;
+  netWorkerBusy=true;textSendQueued=false;textSending=true;
   if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_send",12288,request,1,nullptr,0)!=pdPASS){
-    netWorkerBusy=false;delete request;
+    netWorkerBusy=false;textSending=false;delete request;
     setStatus("Tache HTTPS indisponible : reessayer");
     changeView(View::SEND_RESULT);
   }
@@ -1607,7 +1610,11 @@ void openSectionSelection(){
         // Show cached messages instantly; defer server acknowledgement.
         if(historySize)pendingReadId=history[historySize-1].id;
         break;
-      case 1:changeView(View::COMPOSE);break;
+      case 1:
+        if(textSendQueued || textSending){
+          setStatus("Envoi deja en cours");changeView(View::SEND_PROGRESS);
+        }else changeView(View::COMPOSE);
+        break;
       case 2:changeView(View::SENT);refreshSent();break;
     }
   }else if(homeIndex==1){
@@ -1960,9 +1967,11 @@ void loop(){
      lastWifiAttempt=now;WiFi.reconnect();
    }
  }else if(now-lastCheck>12000){
-   lastCheck=now;
-   // Queue HTTPS on a separate FreeRTOS task; the keyboard always keeps running.
-   scheduleNetworkPoll();
+   // Do not start lengthy background HTTPS polls while the user is composing.
+   if(view!=View::COMPOSE && view!=View::SEND_CONFIRM &&
+      view!=View::VOICE_READY && view!=View::VOICE_RECORDING){
+     lastCheck=now; scheduleNetworkPoll();
+   }
  }
  delay(10);
 }
