@@ -27,7 +27,7 @@ constexpr int SD_SCK=40, SD_MISO=39, SD_MOSI=14, SD_CS=12;
 constexpr uint32_t AUDIO_RATE=16000;
 constexpr size_t AUDIO_FRAME=1024, AUDIO_FRAMES=48; // 3.072 seconds, 98,348-byte WAV
 constexpr size_t MAX_VOICE=120000;
-constexpr char TX_AUDIO[]="/nexus_tx.wav", RX_AUDIO[]="/nexus_rx.wav", TMP_RX[]="/nexus_rx.tmp", RX_BACKUP[]="/nexus_rx.bak";
+constexpr char TX_AUDIO[]="/nexus_tx.wav", NEW_TX_AUDIO[]="/nexus_tx.new", OLD_TX_AUDIO[]="/nexus_tx.bak", RX_AUDIO[]="/nexus_rx.wav", TMP_RX[]="/nexus_rx.tmp", RX_BACKUP[]="/nexus_rx.bak";
 constexpr char HISTORY[]="/nexus_history.txt";
 constexpr char VOICE_ROOT[]="/NEXUS/MESSAGES_VOCAUX";
 constexpr char VOICE_INDEX[]="/NEXUS/MESSAGES_VOCAUX/INDEX.txt";
@@ -61,7 +61,7 @@ int batteryVoltageSmooth=-1;
 int batteryLevelSmooth=-1;
 uint32_t batterySampleAt=0;
 bool sdReady=false, netReady=false, serverReady=false, prefsReady=false, storageFault=false;
-enum class View { HOME, SECTION, VOICE_ARCHIVE, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
+enum class View { HOME, SECTION, VOICE_ARCHIVE, VOICE_READY, VOICE_RECORDING, SEND_CONFIRM, SEND_PROGRESS, SEND_RESULT, MORSE_EDIT, MORSE_RESULT, MORSE_TRAIN, STORAGE_INFO, BATTERY_INFO, SEARCH_EDIT, SEARCH_RESULTS, SEARCH_VIEW, WIFI_CONFIRM, WIFI_LIST, WIFI_PASSWORD, CONFIG, EDIT_URL, EDIT_TOKEN, EDIT_PEER, COMPOSE, HISTORY, SENT, DIAG, DELETE_CONFIRM, DISCARD_VOICE };
 View view=View::HOME;
 String input;
 String scanNames[24];
@@ -73,7 +73,8 @@ uint8_t morseWpm=12; char morseQuizLetter='A'; bool morseQuizAnswered=false;
 String morseQuizAnswer;
 String morseOutput;
 uint8_t scanCount=0, scanPage=0, pageHistory=0;
-uint8_t textPage=0, voiceSelection=0, voiceCount=0;
+uint8_t textPage=0, voiceSelection=0, voiceCount=0, voiceChoice=0;
+uint32_t voiceRecordedSamples=0;
 constexpr uint8_t SEARCH_MAX=24;
 String searchPaths[SEARCH_MAX];
 uint8_t searchSize=0,searchSelection=0,searchPage=0;
@@ -319,6 +320,45 @@ void paint(){
      shown.length()>60?shown.substring(60,90):"",
      shown.length()>90?shown.substring(90):"",
      "OPT: retour");break;}
+ case View::VOICE_READY: {
+   if(!sdReady || !SD.exists(TX_AUDIO)){
+     drawLines("VOCAL NON DISPONIBLE","Aucun brouillon sur microSD","Retour : OPT");
+     break;
+   }
+   String items[]={"Envoyer le vocal","Ecouter le brouillon","Reenregistrer (remplacer)","Garder et retourner"};
+   drawMenu("VOCAL PRET",items,4,voiceChoice,";/. choisir  ENTREE confirmer");
+   break;
+ }
+ case View::VOICE_RECORDING: {
+   const uint32_t seconds=voiceRecordedSamples/AUDIO_RATE;
+   drawLines("ENREGISTREMENT VOCAL",
+      "Micro actif : 16 kHz mono",
+      "Duree: "+String(seconds)+"/3 secondes",
+      "Carte microSD en ecriture",
+      "OPT : annuler",
+      "Patiente : capture audio");break;
+ }
+ case View::SEND_CONFIRM: {
+   const String shown=editor.length()>92?editor.substring(0,92)+"...":editor;
+   drawLines("CONFIRMER L'ENVOI",
+     "Vers : "+recipient,
+     shown.substring(0,min((size_t)31,shown.length())),
+     shown.length()>31?shown.substring(31,min((size_t)62,shown.length())):"",
+     "ENTREE envoyer / OPT modifier",
+     "Le texte reste en brouillon");break;
+ }
+ case View::SEND_PROGRESS:
+   drawLines("ENVOI EN COURS",
+      "Message vers : "+recipient,
+      "Connexion securisee HTTPS",
+      "Clavier libre : retour OPT",
+      "Patiente : confirmation",
+      "Aucun doublon envoye");break;
+ case View::SEND_RESULT:
+   drawLines("STATUT DE L'ENVOI",
+      clipped(statusLine,35),
+      "ENTREE : retour messages",
+      "OPT : revenir au brouillon");break;
  case View::VOICE_ARCHIVE: {
    if(!sdReady){drawLines("ARCHIVES VOCALES","Inserer une microSD"," puis detecter microSD","OPT: retour");break;}
    if(!voiceCount){drawLines("ARCHIVES VOCALES","Aucun vocal archive","Les vocaux recus sont","sauvegardes automatiquement","OPT: retour");break;}
@@ -1057,37 +1097,87 @@ void writeWavHeader(File& f,uint32_t samples){
   writeLE32(f,16);writeLE16(f,1);writeLE16(f,1);writeLE32(f,AUDIO_RATE);
   writeLE32(f,AUDIO_RATE*2);writeLE16(f,2);writeLE16(f,16);f.write((const uint8_t*)"data",4);writeLE32(f,bytes);
 }
-void recordVoice(){
-  if(pendingVoiceId.length() || (sdReady && SD.exists(TX_AUDIO))){
-    setStatus("Vocal deja present: U envoyer, Z effacer");paint();return;
+void recordVoice(bool replaceOld=false){
+  if(!sdReady){setStatus("Carte microSD absente : vocal impossible");paint();return;}
+  // An earlier recording must remain available until the user chooses to replace it.
+  if(!replaceOld && SD.exists(TX_AUDIO)){
+    voiceChoice=0;setStatus("Brouillon vocal present : choisir une action");
+    changeView(View::VOICE_READY);return;
   }
-  if(!sdReady){setStatus("Inserer une microSD (vocal)");paint();return;}
-  SD.remove(TX_AUDIO); // Ensure a new recording never appends to a previous WAV.
-  File f=SD.open(TX_AUDIO,FILE_WRITE);
-  if(!f){setStatus("Erreur creation WAV");paint();return;}
-  f.seek(0);writeWavHeader(f,AUDIO_FRAME*AUDIO_FRAMES);
-  if(f.position()!=44){f.close();SD.remove(TX_AUDIO);setStatus("Entete WAV impossible");paint();return;}
-  M5Cardputer.Speaker.end();
-  if(!M5Cardputer.Mic.begin()){f.close();SD.remove(TX_AUDIO);setStatus("Micro non initialise");paint();return;}
-  delay(1200); // ES8311 needs codec warm-up after Mic.begin.
-  setStatus("REC 3 secondes (micro actif)");paint();
-  bool ok=true;uint32_t total=0;
-  int16_t audio[AUDIO_FRAME]; // 2 KB stack; never requires PSRAM
+  if(!replaceOld && pendingVoiceId.length() && !SD.exists(TX_AUDIO)){
+    pendingVoiceId="";if(prefsReady)prefs.remove("vocid"); // stale ID only
+  }
+  SD.remove(NEW_TX_AUDIO);
+  File f=SD.open(NEW_TX_AUDIO,FILE_WRITE);
+  if(!f){setStatus("Impossible de creer WAV sur microSD");paint();return;}
+  writeWavHeader(f,AUDIO_FRAME*AUDIO_FRAMES);
+  if(f.position()!=44){
+    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Erreur entete WAV : SD");paint();return;
+  }
+  M5Cardputer.Speaker.end(); // exclusive I2S with microphone in M5Unified
+  M5Cardputer.Mic.end(); // clear any interrupted capture from a previous attempt
+  if(!M5Cardputer.Mic.begin()){
+    f.close();SD.remove(NEW_TX_AUDIO);setStatus("Micro ES8311 non initialise");paint();return;
+  }
+  voiceRecordedSamples=0;changeView(View::VOICE_RECORDING);
+  delay(1150); // ES8311 ADC analog warm-up, not a UI/network wait
+  alignas(4) int16_t audio[AUDIO_FRAME];
+  bool failed=false,cancelled=false,allZero=true;uint32_t samples=0;
   for(size_t i=0;i<AUDIO_FRAMES;i++){
-    if(!M5Cardputer.Mic.record(audio,AUDIO_FRAME,AUDIO_RATE,false)){ok=false;break;}
-    uint32_t t=millis();while(M5Cardputer.Mic.isRecording() && millis()-t<1800)delay(1);
-    if(M5Cardputer.Mic.isRecording()){ok=false;break;}
-    if(f.write((uint8_t*)audio,sizeof(audio))!=sizeof(audio)){ok=false;break;}
-    total+=AUDIO_FRAME;
+    if(!M5Cardputer.Mic.record(audio,AUDIO_FRAME,AUDIO_RATE,false)){
+      failed=true;setStatus("Micro : capture refusee (I2S)");break;
+    }
+    const uint32_t beginAt=millis();
+    while(M5Cardputer.Mic.isRecording() && millis()-beginAt<1600){
+      M5Cardputer.update();
+      if(M5Cardputer.Keyboard.keysState().opt){cancelled=true;break;}
+      delay(2);
+    }
+    if(cancelled)break;
+    if(M5Cardputer.Mic.isRecording()){
+      failed=true;setStatus("Micro : capture trop lente");break;
+    }
+    for(int j=0;j<AUDIO_FRAME;j++)if(audio[j]!=0){allZero=false;break;}
+    if(f.write((uint8_t*)audio,sizeof(audio))!=sizeof(audio)){
+      failed=true;setStatus("Carte microSD : ecriture interrompue");break;
+    }
+    samples+=AUDIO_FRAME;voiceRecordedSamples=samples;
+    if(i%8==7)paint(); // visible recording progress every ~0.5 s
   }
-  M5Cardputer.Mic.end();f.close();
-  if(!ok||total!=AUDIO_FRAME*AUDIO_FRAMES){SD.remove(TX_AUDIO);setStatus("Echec enregistrement");paint();return;}
-  File verify=SD.open(TX_AUDIO,FILE_READ);
-  const bool exact=verify && verify.size()==44+2*total;
+  M5Cardputer.Mic.end();f.flush();f.close();
+  if(cancelled || failed || samples!=AUDIO_FRAME*AUDIO_FRAMES || allZero){
+    SD.remove(NEW_TX_AUDIO);
+    if(cancelled)setStatus("Enregistrement annule : ancien vocal conserve");
+    else if(allZero && !failed)setStatus("Micro muet : verifier codec ES8311");
+    else if(!failed)setStatus("Enregistrement incomplet");
+    paint();return;
+  }
+  File verify=SD.open(NEW_TX_AUDIO,FILE_READ);
+  const bool valid=verify && verify.size()==44+2*samples;
   if(verify)verify.close();
-  if(!exact){SD.remove(TX_AUDIO);setStatus("WAV incomplet sur microSD");paint();return;}
-  pendingVoiceId=nonce();prefs.putString("vocid",pendingVoiceId);
-  setStatus("Vocal pret: U pour envoyer");paint();
+  if(!valid){
+    SD.remove(NEW_TX_AUDIO);setStatus("MicroSD : fichier WAV incomplet");paint();return;
+  }
+  // Transactional replacement: preserve the old voice until the new one is valid.
+  SD.remove(OLD_TX_AUDIO);
+  const bool hadOld=SD.exists(TX_AUDIO);
+  if(hadOld && !SD.rename(TX_AUDIO,OLD_TX_AUDIO)){
+    SD.remove(NEW_TX_AUDIO);setStatus("Impossible de proteger l'ancien vocal");paint();return;
+  }
+  if(!SD.rename(NEW_TX_AUDIO,TX_AUDIO)){
+    if(hadOld)SD.rename(OLD_TX_AUDIO,TX_AUDIO);
+    SD.remove(NEW_TX_AUDIO);
+    setStatus("Impossible de finaliser WAV, ancien conserve");paint();return;
+  }
+  if(hadOld)SD.remove(OLD_TX_AUDIO);
+  pendingVoiceId=nonce();
+  if(prefsReady){
+    prefs.putString("vocid",pendingVoiceId);
+    if(prefs.getString("vocid","")!=pendingVoiceId){
+      storageFault=true;setStatus("Vocal pret, NVS pleine : ID temporaire");
+    }else setStatus("Vocal de 3 s enregistre !");
+  }else setStatus("Vocal pret, memoire NVS indisponible");
+  voiceChoice=0;changeView(View::VOICE_READY);
 }
 void uploadVoice(){
   if(!sdReady){setStatus("MicroSD requise");paint();return;}
@@ -1447,7 +1537,7 @@ void handleInput(){
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
     else if(view==View::SEARCH_VIEW)changeView(View::SEARCH_RESULTS);
     else if(view==View::MORSE_RESULT || view==View::MORSE_EDIT || view==View::MORSE_TRAIN ||
-            view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO || view==View::BATTERY_INFO ||
+            view==View::VOICE_READY || view==View::VOICE_ARCHIVE || view==View::STORAGE_INFO || view==View::BATTERY_INFO ||
             view==View::SEARCH_EDIT || view==View::SEARCH_RESULTS)changeView(View::SECTION);
     else if(view==View::SECTION)changeView(View::HOME);
     else{changeView(View::SECTION);}
@@ -1482,6 +1572,18 @@ void handleInput(){
       paint();
     }
     return;
+  }
+  if(view==View::VOICE_READY){
+    bool moved=false;
+    if(upPressed){voiceChoice=(voiceChoice+3)%4;moved=true;}
+    if(downPressed){voiceChoice=(voiceChoice+1)%4;moved=true;}
+    if(choose){
+      if(voiceChoice==0){uploadVoice();return;}
+      if(voiceChoice==1){playArchiveWav(TX_AUDIO);paint();return;}
+      if(voiceChoice==2){recordVoice(true);return;}
+      changeView(View::SECTION);return;
+    }
+    if(moved)paint();return;
   }
   if(view==View::VOICE_ARCHIVE){
     if(voiceCount){
