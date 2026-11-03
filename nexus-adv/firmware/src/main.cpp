@@ -103,82 +103,96 @@ void flushDraftIfDue(){
   }
 }
 void setStatus(const String& msg){ statusLine=clipped(msg,60);Serial.println("NEXUS: "+statusLine); }
-// NEXUS vector interface: inspired by the compact carousel layout of Bruce,
-// but drawn using original primitives. No bitmap assets or additional libraries.
-void drawStatusBar(const String& title){
-  auto& l=M5Cardputer.Display;
-  l.fillRect(0,0,240,22,COL_PANEL);
-  l.fillRect(0,20,240,2,COL_ACCENT);
-  l.fillRoundRect(5,4,15,14,4,COL_ACCENT);
-  l.setTextSize(1);
-  l.setTextColor(COL_BG,COL_ACCENT);l.setCursor(9,8);l.print("N");
-  l.setTextColor(COL_TEXT,COL_PANEL);l.setCursor(26,8);
-  l.print(clipped(title,22));
-  const bool connected=WiFi.status()==WL_CONNECTED;
-  const uint16_t signalColor=connected?COL_ACCENT2:COL_WARN;
-  l.fillCircle(190,10,3,signalColor);
-  l.drawLine(184,6,190,3,signalColor);l.drawLine(190,3,196,6,signalColor);
-  l.drawLine(186,9,190,7,signalColor);l.drawLine(190,7,194,9,signalColor);
-  l.fillRoundRect(204,5,12,11,2,sdReady?COL_ACCENT2:COL_LINE);
-  l.setTextColor(COL_BG,sdReady?COL_ACCENT2:COL_LINE);
-  l.setCursor(206,7);l.print("S");
-  int level=M5Cardputer.Power.getBatteryLevel();
-  level=constrain(level,0,100);
-  l.drawRect(220,5,16,10,COL_TEXT);
-  l.fillRect(236,8,2,4,COL_TEXT);
-  if(level>0)l.fillRect(222,7,(level*12)/100,6,level<=15?COL_WARN:COL_ACCENT2);
+// NEXUS Neon UI: original lightweight vector art with Bruce-like navigation.
+// Drawn from primitives; no copied icons, bitmap assets, or extra dependencies.
+struct UiPalette {uint16_t dark,mid,primary,shine;};
+UiPalette palette(){
+  static const UiPalette colors[]={
+    {0x080C,0x11C8,0x05FF,0x7DFF}, // Messages: blue / cyan
+    {0x2004,0x49A7,0xFB2D,0xFDE9}, // Voice: warm coral
+    {0x180A,0x492B,0xC31F,0xEBBF}, // Morse: neon violet
+    {0x0026,0x1169,0x07FF,0x7DFF}, // Wi-Fi: blue / teal
+    {0x0805,0x1287,0x3FEA,0xB7FB}, // System: green
+    {0x2080,0x51E0,0xFF20,0xFFCF}  // Tools: gold
+  };
+  return colors[homeIndex<HOME_COUNT?homeIndex:0];
 }
-void drawFooter(const String& hint){
-  auto& l=M5Cardputer.Display;
-  l.drawFastHLine(0,114,240,COL_LINE);
-  l.fillRect(0,115,240,20,COL_BG);
-  l.setTextSize(1);l.setTextColor(COL_MUTED,COL_BG);
-  l.setCursor(5,119);l.print(clipped(hint,38));
+uint16_t colorMix(uint16_t x,uint16_t y,uint8_t ratio){
+  const uint16_t r=(((x>>11)&31)*(255-ratio)+((y>>11)&31)*ratio)/255;
+  const uint16_t g=(((x>>5)&63)*(255-ratio)+((y>>5)&63)*ratio)/255;
+  const uint16_t b=((x&31)*(255-ratio)+(y&31)*ratio)/255;
+  return (r<<11)|(g<<5)|b;
+}
+void drawBackdrop(){
+  auto& d=M5Cardputer.Display; const auto theme=palette();
+  // Smooth full-colour background in stripes, inexpensive compared with bitmaps.
+  for(int y=22;y<114;y+=3){
+    const uint8_t fade=(uint8_t)((y-22)*170/92);
+    d.fillRect(0,y,240,3,colorMix(theme.mid,theme.dark,fade));
+  }
+  d.drawLine(0,91,240,38,colorMix(theme.primary,theme.dark,105));
+  d.drawLine(0,99,240,46,colorMix(theme.primary,theme.dark,135));
+  for(int i=0;i<8;i++)
+    d.fillCircle((i*47+21)%239,24+(i*19)%85,1,colorMix(theme.shine,theme.dark,125));
+}
+void drawStatusBar(const String& heading){
+  auto& d=M5Cardputer.Display;const auto p=palette();
+  d.fillRect(0,0,240,22,0x080F);
+  d.fillRect(0,20,240,2,p.primary);
+  d.fillRoundRect(5,3,17,15,4,p.primary);
+  d.setTextSize(1);d.setTextColor(0x0000,p.primary);d.setCursor(10,7);d.print("N");
+  d.setTextColor(0xFFFF,0x080F);d.setCursor(28,7);d.print(clipped(heading,24));
+  const uint16_t signal=WiFi.status()==WL_CONNECTED?p.shine:0xFDA0;
+  // Small signal, SD and battery indicators.
+  d.fillCircle(191,13,2,signal);
+  d.drawLine(184,8,190,4,signal);d.drawLine(190,4,197,8,signal);
+  d.drawLine(187,10,190,8,signal);d.drawLine(190,8,194,10,signal);
+  d.fillRoundRect(203,5,12,10,2,sdReady?p.shine:0x4208);
+  d.setTextColor(0x0000,sdReady?p.shine:0x4208);d.setCursor(206,6);d.print("S");
+  const int batt=constrain((int)M5Cardputer.Power.getBatteryLevel(),0,100);
+  d.drawRect(219,5,16,11,0xFFFF);d.fillRect(236,8,2,5,0xFFFF);
+  if(batt)d.fillRect(221,7,12*batt/100,7,batt<15?0xFBC0:p.shine);
+}
+void drawFooter(const String& text){
+  auto& d=M5Cardputer.Display;const auto p=palette();
+  d.fillRect(0,114,240,21,0x080F);
+  d.fillRect(0,114,240,2,p.primary);
+  d.setTextSize(1);d.setTextColor(0xD6BA,0x080F);
+  d.setCursor(6,120);d.print(clipped(text,37));
 }
 void drawLines(const String& title,const String& a="",const String& b="",
                const String& c="",const String& d="",const String& e=""){
-  auto& l=M5Cardputer.Display;
-  if(fullRepaint)l.fillScreen(COL_BG);
-  drawStatusBar(title);
-  l.fillRect(0,22,240,92,COL_BG);
+  auto& l=M5Cardputer.Display;const auto p=palette();
+  drawBackdrop();drawStatusBar(title);
   const String lines[]={a,b,c,d,e};
-  l.setTextSize(1);
   for(int i=0;i<5;i++){
-    const int y=26+i*17;
-    if(i%2==0)l.fillRoundRect(4,y-1,232,16,3,COL_PANEL);
-    l.setTextColor(i==0?COL_ACCENT2:COL_TEXT,i%2==0?COL_PANEL:COL_BG);
-    l.setCursor(10,y+4);
-    l.print(clipped(lines[i],36));
+    const int y=25+i*17;
+    const uint16_t fill=(i%2)?colorMix(p.dark,0x0000,130):colorMix(p.mid,0x0000,125);
+    l.fillRoundRect(6,y,228,16,4,fill);
+    if(i==0)l.fillRect(7,y+3,2,10,p.primary);
+    l.setTextSize(1);l.setTextColor(i==0?p.shine:0xFFFF,fill);
+    l.setCursor(14,y+4);l.print(clipped(lines[i],35));
   }
   drawFooter(statusLine);
 }
-void menuFrame(const String& title){
-  auto& l=M5Cardputer.Display;
-  if(fullRepaint)l.fillScreen(COL_BG);
-  drawStatusBar(title);
-}
+void menuFrame(const String& title){drawBackdrop();drawStatusBar(title);}
 void drawMenu(const String& title,const String opts[],int count,int selected,
               const String& hint="; Haut   . Bas   Entree OK"){
-  auto& l=M5Cardputer.Display;
-  menuFrame(title);
-  const int start=(selected/5)*5;
-  l.fillRect(0,22,240,92,COL_BG);
-  for(int r=0;r<5;r++){
-    const int idx=start+r;
-    if(idx>=count)break;
-    const int y=25+r*17;
-    if(idx==selected){
-      l.fillRoundRect(4,y-1,232,17,5,COL_ACCENT);
-      l.fillTriangle(9,y+4,9,y+12,15,y+8,COL_BG);
-      l.setTextColor(COL_BG,COL_ACCENT);
-    }else{
-      l.fillRoundRect(4,y-1,232,17,5,COL_PANEL);
-      l.setTextColor(COL_TEXT,COL_PANEL);
-    }
-    l.setTextSize(1);l.setCursor(19,y+4);
-    l.print(clipped(opts[idx],34));
+  auto& l=M5Cardputer.Display;const auto p=palette();
+  menuFrame(title);const int start=(selected/5)*5;
+  for(int row=0;row<5;row++){
+    const int idx=start+row;if(idx>=count)break;
+    const int y=26+17*row;const bool active=idx==selected;
+    const uint16_t fill=active?p.primary:colorMix(p.mid,0x0000,115);
+    l.fillRoundRect(5,y-1,230,17,5,fill);
+    if(active){
+      l.drawRoundRect(5,y-1,230,17,5,p.shine);
+      l.fillTriangle(10,y+4,10,y+12,17,y+8,0x0000);
+    }else l.fillCircle(13,y+8,2,p.shine);
+    l.setTextSize(1);l.setTextColor(active?0x0000:0xFFFF,fill);
+    l.setCursor(23,y+4);l.print(clipped(opts[idx],32));
   }
-  drawFooter(count>5 ? String(selected+1)+"/"+String(count)+"   "+hint : hint);
+  drawFooter((count>5?String(selected+1)+"/"+String(count)+" ":"")+hint);
 }
 
 String sectionTitle(int section){
@@ -195,81 +209,81 @@ int sectionOptions(int section,String items[]){
   items[0]="Rechercher dans textes";items[1]="Batterie : tension et %";items[2]="Espace sur microSD";items[3]="A propos de NEXUS";return 4;
 }
 void drawHome(){
-  auto& l=M5Cardputer.Display;
+  auto& l=M5Cardputer.Display;const auto p=palette();
   static const char* names[]={"MESSAGES","VOCAUX","MORSE","WI-FI","SYSTEME","AUTRES"};
-  static const char* descriptions[]={"Lire et ecrire","Parler et ecouter",
-    "Coder et decoder","Connexion reseau","Reglages et etat","Archives et outils"};
-  if(fullRepaint)l.fillScreen(COL_BG);
-  drawStatusBar("NEXUS MESSAGERIE");
-  l.fillRect(0,22,240,92,COL_BG);
-  // Main carousel card, six custom vector icons and two clear navigation arrows.
-  l.fillRoundRect(41,26,158,81,12,COL_PANEL);
-  l.drawRoundRect(41,26,158,81,12,COL_LINE);
-  l.fillRoundRect(49,30,142,3,1,COL_ACCENT2);
-  l.fillTriangle(13,65,31,55,31,75,COL_ACCENT);
-  l.fillTriangle(227,65,209,55,209,75,COL_ACCENT);
+  static const char* captions[]={"Conversations","Audio et microSD",
+    "Coder et decoder","Reseaux disponibles","Reglages","Archives et outils"};
+  drawBackdrop();drawStatusBar("NEXUS ADV");
+  // Solid title panel and glowing navigation, similar rhythm to Bruce's carousel.
+  l.fillRoundRect(38,26,164,76,11,colorMix(p.dark,0x0000,70));
+  l.drawRoundRect(38,26,164,76,11,p.primary);
+  l.drawFastHLine(52,30,136,p.shine);
+  l.fillTriangle(10,65,30,52,30,78,p.primary);
+  l.fillTriangle(230,65,210,52,210,78,p.primary);
+  l.fillTriangle(15,65,26,58,26,72,p.shine);
+  l.fillTriangle(225,65,214,58,214,72,p.shine);
   const int x=120,y=61;
   switch(homeIndex){
-    case 0: // message bubbles
-      l.fillRoundRect(x-29,y-19,51,30,6,COL_TEXT);
-      l.fillTriangle(x-19,y+9,x-13,y+9,x-20,y+18,COL_TEXT);
-      l.fillRoundRect(x-9,y-5,42,25,6,COL_ACCENT2);
-      l.fillTriangle(x+22,y+18,x+29,y+18,x+28,y+25,COL_ACCENT2);
-      l.drawFastHLine(x-1,y+3,23,COL_BG);
-      l.drawFastHLine(x-1,y+9,17,COL_BG);break;
-    case 1: // microphone with small sound waves
-      l.fillRoundRect(x-8,y-23,16,30,8,COL_ACCENT2);
-      l.drawLine(x-17,y-5,x-17,y+7,COL_TEXT);
-      l.drawLine(x+17,y-5,x+17,y+7,COL_TEXT);
-      l.drawFastHLine(x-17,y+10,34,COL_TEXT);
-      l.drawFastVLine(x,y+10,12,COL_TEXT);
-      l.drawFastHLine(x-10,y+22,20,COL_TEXT);
-      l.drawLine(x-17,y+7,x-11,y+13,COL_TEXT);
-      l.drawLine(x+17,y+7,x+11,y+13,COL_TEXT);break;
-    case 2: // dots and dashes (Morse)
-      l.fillCircle(x-28,y-7,7,COL_ACCENT2);
-      l.fillRoundRect(x-10,y-12,36,9,4,COL_TEXT);
-      l.fillCircle(x+33,y-7,6,COL_ACCENT);
-      l.fillRoundRect(x-31,y+9,21,8,4,COL_TEXT);
-      l.fillCircle(x+5,y+13,6,COL_ACCENT2);
-      l.fillRoundRect(x+17,y+9,20,8,4,COL_TEXT);break;
-    case 3: // Wi-Fi
-      l.drawLine(x-37,y-5,x,y-23,COL_ACCENT2);
-      l.drawLine(x,y-23,x+37,y-5,COL_ACCENT2);
-      l.drawLine(x-26,y+2,x,y-11,COL_TEXT);
-      l.drawLine(x,y-11,x+26,y+2,COL_TEXT);
-      l.drawLine(x-13,y+12,x,y+5,COL_ACCENT2);
-      l.drawLine(x,y+5,x+13,y+12,COL_ACCENT2);
-      l.fillCircle(x,y+22,6,COL_ACCENT);break;
-    case 4: // simple settings cog / sliders
-      l.drawCircle(x,y,20,COL_ACCENT2);
-      l.drawCircle(x,y,9,COL_TEXT);
-      l.fillCircle(x,y,4,COL_ACCENT);
+    case 0: // Crisp envelope + incoming notification
+      l.fillRoundRect(x-28,y-20,56,39,5,p.shine);
+      l.fillRoundRect(x-25,y-17,50,32,3,p.dark);
+      l.drawLine(x-25,y-15,x,y+5,p.shine);
+      l.drawLine(x+25,y-15,x,y+5,p.shine);
+      l.drawLine(x-25,y+14,x-8,y+1,p.shine);
+      l.drawLine(x+25,y+14,x+8,y+1,p.shine);
+      l.fillCircle(x+29,y-23,7,p.primary);break;
+    case 1: // Clear microphone silhouette and waves
+      l.fillRoundRect(x-9,y-23,18,30,9,p.shine);
+      l.drawRoundRect(x-21,y-12,42,32,13,p.primary);
+      l.fillRect(x-21,y-13,7,12,p.dark);
+      l.fillRect(x+14,y-13,7,12,p.dark);
+      l.drawFastVLine(x,y+20,9,p.shine);
+      l.fillRoundRect(x-14,y+29,28,4,2,p.shine);
+      l.drawLine(x-30,y-9,x-33,y+8,p.primary);
+      l.drawLine(x+30,y-9,x+33,y+8,p.primary);break;
+    case 2: // Morse pulse line, dots and dashes
+      l.fillCircle(x-30,y-11,7,p.shine);
+      l.fillRoundRect(x-13,y-17,43,12,5,p.shine);
+      l.fillCircle(x+36,y-11,6,p.primary);
+      l.fillRoundRect(x-36,y+13,24,8,4,p.primary);
+      l.fillCircle(x+3,y+17,6,p.shine);
+      l.fillRoundRect(x+17,y+13,23,8,4,p.shine);break;
+    case 3: // Three WiFi signal tiers
+      l.fillCircle(x,y+22,7,p.shine);
+      for(int i=-1;i<=1;i++){
+        l.drawLine(x+i*10,y+11-abs(i)*7,x+i*25,y-14-abs(i)*5,p.shine);
+        if(i!=0)l.drawLine(x+i*25,y-14-abs(i)*5,x+i*39,y+1-abs(i)*3,p.primary);
+      }
+      l.drawLine(x-34,y-20,x,y-34,p.primary);
+      l.drawLine(x,y-34,x+34,y-20,p.primary);break;
+    case 4: // Gear
+      l.fillCircle(x,y,25,p.shine);
+      l.fillCircle(x,y,18,p.dark);
+      l.fillCircle(x,y,9,p.primary);
+      l.fillCircle(x,y,3,p.dark);
       for(int i=0;i<8;i++){
-        float a=i*3.14159265f/4.0f;
-        l.drawLine(x+23*cosf(a),y+23*sinf(a),
-                   x+29*cosf(a),y+29*sinf(a),COL_TEXT);
+        const float a=i*3.14159265f/4;
+        l.drawLine(x+25*cosf(a),y+25*sinf(a),x+31*cosf(a),y+31*sinf(a),p.shine);
       }break;
-    default: // folder and tools
-      l.fillRoundRect(x-32,y-16,64,42,6,COL_ACCENT2);
-      l.fillRoundRect(x-31,y-22,29,10,3,COL_ACCENT2);
-      l.drawRoundRect(x-24,y-9,48,26,4,COL_BG);
-      l.fillCircle(x-13,y+4,4,COL_BG);
-      l.fillCircle(x,y+4,4,COL_BG);
-      l.fillCircle(x+13,y+4,4,COL_BG);break;
+    default: // Utility folder
+      l.fillRoundRect(x-36,y-20,36,12,3,p.shine);
+      l.fillRoundRect(x-36,y-14,72,45,5,p.primary);
+      l.drawRoundRect(x-32,y-9,64,34,4,p.shine);
+      l.fillCircle(x-19,y+8,5,p.dark);
+      l.fillCircle(x,y+8,5,p.dark);
+      l.fillCircle(x+19,y+8,5,p.dark);break;
   }
-  l.setTextSize(1);l.setTextColor(COL_TEXT,COL_PANEL);
-  l.setCursor(120-strlen(names[homeIndex])*3,90);
-  l.print(names[homeIndex]);
-  l.setTextColor(COL_MUTED,COL_BG);
-  l.setCursor(120-strlen(descriptions[homeIndex])*3,108);
-  l.print(descriptions[homeIndex]);
-  if(unreadCount>0){
-    l.fillRoundRect(153,32,39,15,5,COL_ACCENT);
-    l.setTextColor(COL_BG,COL_ACCENT);
-    l.setCursor(157,36);l.print(String(unreadCount>99?"99+":String(unreadCount))+" nouv");
+  l.fillRoundRect(58,87,124,13,3,p.primary);
+  l.setTextSize(1);l.setTextColor(0x0000,p.primary);
+  l.setCursor(120-strlen(names[homeIndex])*3,90);l.print(names[homeIndex]);
+  l.setTextColor(0xFFFF,p.dark);
+  l.setCursor(120-strlen(captions[homeIndex])*3,105);l.print(captions[homeIndex]);
+  if(unreadCount>0 && homeIndex==0){
+    l.fillRoundRect(170,24,36,15,5,0xFC00);
+    l.setTextColor(0x0000,0xFC00);l.setCursor(174,28);
+    l.print(unreadCount>99?"99+":String(unreadCount));
   }
-  drawFooter("< ,     / >    Entree : ouvrir");
+  drawFooter(" , / CHOISIR   ENTREE OUVRIR");
 }
 
 void paint(){
