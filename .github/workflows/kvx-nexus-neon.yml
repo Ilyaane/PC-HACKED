@@ -52,5 +52,29 @@ jobs:
         run: pio run -e m5stack-cardputer
       - name: Validate app image against partition table
         run: python kvx-nexus-neon/tools/verify_build.py kvxputer
-      # No upload-artifact: a firmware containing a compiled shared token
-      # must not be published from a public GitHub Actions run.
+      # Never publish an unencrypted image: the token is compiled into it.
+      # Encrypt the completed image in CI, then download/decrypt privately.
+      - name: Encrypt validated firmware for private handoff
+        env:
+          NEXUS_SHARED_TOKEN: ${{ secrets.NEXUS_SHARED_TOKEN }}
+        run: |
+          test -n "$NEXUS_SHARED_TOKEN"
+          mkdir -p delivery
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 300000 \
+            -in kvxputer/.pio/build/m5stack-cardputer/firmware.bin \
+            -out delivery/KVXputer_Nexus_Neon_Text.bin.enc \
+            -pass env:NEXUS_SHARED_TOKEN
+          test -s delivery/KVXputer_Nexus_Neon_Text.bin.enc
+          # Confirm decryptability without ever exposing secret or plaintext.
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 \
+            -in delivery/KVXputer_Nexus_Neon_Text.bin.enc \
+            -out /tmp/kvx-roundtrip.bin -pass env:NEXUS_SHARED_TOKEN
+          cmp -s /tmp/kvx-roundtrip.bin kvxputer/.pio/build/m5stack-cardputer/firmware.bin
+          shred -u /tmp/kvx-roundtrip.bin || rm -f /tmp/kvx-roundtrip.bin
+      - name: Upload encrypted image (no plaintext token in public artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: KVXputer-Nexus-Neon-Text-Encrypted
+          path: delivery/KVXputer_Nexus_Neon_Text.bin.enc
+          retention-days: 1
+          if-no-files-found: error
