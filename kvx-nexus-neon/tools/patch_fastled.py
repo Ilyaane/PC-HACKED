@@ -31,6 +31,7 @@ for root in glob.glob(".pio/libdeps/*/FastLED/src"):
             continue
         updated=re.sub(r"\\bFP\\b", "FASTLED_FIXED_POINT_ALIAS", original)
         updated=re.sub(r"\\bHAS_ENCODER\\b", "FASTLED_TEMPLATE_HAS_ENCODER", updated)
+        updated=re.sub(r"\\bSHIFT\\b", "FASTLED_MATH_SHIFT", updated)
         if updated!=original:
             path.write_text(updated, encoding="utf-8")
             count += 1
