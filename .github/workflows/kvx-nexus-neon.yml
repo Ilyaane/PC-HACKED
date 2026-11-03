@@ -43,6 +43,7 @@ jobs:
         run: python kvx-nexus-neon/tools/patch_upstream_minifier.py kvxputer/tools/build/patch.py
       - name: Fix upstream FastLED macro collisions and compact BLE text
         run: |
+          python kvx-nexus-neon/tools/pin_fastled.py kvxputer/platformio.ini
           python kvx-nexus-neon/tools/patch_fastled.py kvxputer/tools/build/patch_library_conflicts.py
           python kvx-nexus-neon/tools/patch_ble_font.py kvxputer
       - name: Install PlatformIO
