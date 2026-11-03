@@ -57,6 +57,7 @@ struct NetReply {
 };
 QueueHandle_t netReplyQueue=nullptr;
 bool netWorkerBusy=false,textSendQueued=false,textSending=false,voiceUploadQueued=false,voiceUploadBusy=false,outboxQueued=false;
+bool voiceRecordQueued=false,voiceRecordReplace=false;
 String outgoingText,outgoingRecipient,outgoingId;
 enum class WifiAttempt { NONE, BOOT, USER };
 WifiAttempt wifiAttempt=WifiAttempt::NONE;
@@ -371,6 +372,13 @@ void paint(){
    break;
  }
  case View::VOICE_RECORDING: {
+   if(voiceRecordQueued){
+     drawLines("MICRO EN PREPARATION",
+       "Connexion HTTPS en cours",
+       "Micro demarre sans conflit reseau",
+       "OPT : annuler",
+       "Le brouillon reste conserve");break;
+   }
    const uint32_t seconds=voiceRecordedSamples/AUDIO_RATE;
    drawLines("ENREGISTREMENT VOCAL",
       "Micro actif : 16 kHz mono",
@@ -507,7 +515,7 @@ void paint(){
    if(sdReady){const uint64_t t=SD.totalBytes(),u=SD.usedBytes();
      free="Libre: "+String((uint32_t)((t>u?t-u:0)/(1024*1024)))+" Mio";
      total="Total: "+String((uint32_t)(t/(1024*1024)))+" Mio";}
-   drawLines("STOCKAGE ET VERSION","NEXUS STABILITE BETA",free,total,
+   drawLines("STOCKAGE ET VERSION","NEXUS NEON MORSE V2 BETA",free,total,
      "Code conserve en NVS", "OPT : retour");break;}
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
  case View::DISCARD_VOICE:drawLines("JETER BROUILLON VOCAL?", "ENTREE: supprimer le WAV", "ESC: le conserver");break;
@@ -1258,6 +1266,12 @@ void writeWavHeader(File& f,uint32_t samples){
   writeLE32(f,AUDIO_RATE*2);writeLE16(f,2);writeLE16(f,16);f.write((const uint8_t*)"data",4);writeLE32(f,bytes);
 }
 void recordVoice(bool replaceOld=false){
+  if(netWorkerBusy){
+    voiceRecordQueued=true;voiceRecordReplace=replaceOld;
+    voiceRecordedSamples=0;
+    setStatus("Preparation du microphone apres HTTPS");
+    changeView(View::VOICE_RECORDING);return;
+  }
   if(!sdReady){setStatus("Carte microSD absente : vocal impossible");changeView(View::VOICE_ERROR);return;}
   // An earlier recording must remain available until the user chooses to replace it.
   if(!replaceOld && SD.exists(TX_AUDIO)){
@@ -1694,6 +1708,13 @@ void openSectionSelection(){
 }
 
 void handleInput(){
+  if(voiceRecordQueued){
+    if(M5Cardputer.Keyboard.isPressed() && M5Cardputer.Keyboard.keysState().opt){
+      voiceRecordQueued=false;setStatus("Enregistrement reporte annule");
+      changeView(View::SECTION);
+    }
+    return;
+  }
   // The HTTPS voice worker owns the microSD while streaming. Block other
   // SD and audio actions, but allow a visual return with OPT.
   if(voiceUploadBusy || voiceUploadQueued){
@@ -1994,7 +2015,12 @@ void setup(){
 void loop(){
  M5Cardputer.update();handleInput();
  serviceWifiScan();servicePendingWifi();flushDraftIfDue();
- serviceNetworkReplies();tryStartTextSend();tryStartVoiceUpload();tryStartOutbox();
+ serviceNetworkReplies();tryStartTextSend();tryStartVoiceUpload();
+ if(voiceRecordQueued && !netWorkerBusy && !textSendQueued && !voiceUploadQueued){
+   const bool replaceOld=voiceRecordReplace;voiceRecordQueued=false;
+   recordVoice(replaceOld);
+ }
+ tryStartOutbox();
  const uint32_t now=millis();
  if(WiFi.status()!=WL_CONNECTED){
    serverReady=false;
@@ -2005,7 +2031,8 @@ void loop(){
  }else if(now-lastCheck>12000){
    // Do not start lengthy background HTTPS polls while the user is composing.
    if(view!=View::COMPOSE && view!=View::SEND_CONFIRM &&
-      view!=View::VOICE_READY && view!=View::VOICE_RECORDING){
+      view!=View::VOICE_READY && view!=View::VOICE_RECORDING &&
+       view!=View::VOICE_ERROR && !(view==View::SECTION && homeIndex==1)){
      lastCheck=now; scheduleNetworkPoll();
    }
  }
