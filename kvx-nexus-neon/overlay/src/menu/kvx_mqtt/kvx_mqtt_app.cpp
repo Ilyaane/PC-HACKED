@@ -546,16 +546,16 @@ void drawSettings(){
 }
 void drawConnectionDots(){
   auto &d=tft;
-  d.startWrite();
+
   d.fillCircle(180,11,3,netWifiUp.load()?C_GREEN:C_RED);
   d.fillCircle(201,11,3,netMqttUp.load()?C_GREEN:C_ORANGE);
   d.fillCircle(222,11,3,sdOK?C_GREEN:C_RED);
-  d.endWrite();
+
 }
 void drawUi(){
   auto &d=tft;
   const bool newPage=!uiInitialized || lastRenderedPage!=currentPage;
-  d.startWrite();
+
   if(newPage){
     d.fillScreen(C_BG);
     switch(currentPage){
@@ -578,7 +578,7 @@ void drawUi(){
     case Page::Network:drawNetwork();break;
     case Page::Settings:drawSettings();break;
   }
-  d.endWrite();
+
   uiInitialized=true;
   lastRenderedPage=currentPage;
 }
