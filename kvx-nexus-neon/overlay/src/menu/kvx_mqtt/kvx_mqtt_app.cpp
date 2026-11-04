@@ -41,7 +41,7 @@ WiFiClientSecure tls;
 MQTTClient mqtt(768,768); // Owned by networkTask, never touched by UI thread.
 String caPem, draft, statusText="Initialisation...", editBuf;
 std::vector<Message> recent;
-bool sdOK=false, inSettings=false, configured=false;
+bool sdOK=false, inSettings=false, configured=false, pendingReconfigure=false;
 enum class Page : uint8_t { Home, Chat, History, Detail, Network, Settings };
 Page currentPage=Page::Home;
 uint8_t selectedTile=0;
@@ -274,10 +274,15 @@ void finishSetting(){
   if(settingsIdx+1<SETTINGS_COUNT){settingsIdx++;editBuf=strValue(settingKey(settingsIdx));}
   else{
     if(saveConfig()){
-      setStatus("Configuration enregistree");delay(300);ESP.restart();
+      // Reconfigure the native task, never reboot the whole KVX firmware.
+      pendingReconfigure=true;
+      stopWorker.store(true);
+      inSettings=false;currentPage=Page::Network;
+      setStatus("Configuration sauvee; reconnexion...");
+    } else {
+      setStatus("CONFIG INVALIDE: verifier champs");
+      settingsIdx=0;editBuf=strValue(settingKey(0));
     }
-    setStatus("CONFIG INVALIDE: verifier champs");
-    settingsIdx=0;editBuf=strValue(settingKey(0));
   }
   lastDraw=0;
 }
@@ -747,6 +752,12 @@ void appStart(){
   drawUi();lastDraw=millis();
 }
 void appService(){
+  // Reconfiguration is asynchronous so the interface never waits for TLS.
+  if(pendingReconfigure && workerFinished.load()){
+    pendingReconfigure=false;
+    appStart();
+    return;
+  }
   keyPress();serviceNetworkEvents();
   if(lastDraw==0){drawUi();lastDraw=millis();}
   vTaskDelay(pdMS_TO_TICKS(12));
@@ -763,7 +774,10 @@ void kvxMqttApp(){
   EscPress=false;SelPress=false;NextPress=false;PrevPress=false;
   UpPress=false;DownPress=false;
   if(!KvxMqtt::workerFinished.load()){
-    displayInfo("MQTT: fermeture TLS en cours",true);return;
+    // On a rapid re-entry, leave KVX responsive while the old task exits.
+    tft.fillScreen(kvxConfig.bgColor);
+    tft.drawCentreString("MQTT: nettoyage en cours",tftWidth/2,tftHeight/2,1);
+    return;
   }
   KvxMqtt::appStart();
   while(!returnToMenu && !forceHome){
