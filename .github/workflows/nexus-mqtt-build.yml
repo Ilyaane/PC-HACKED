@@ -22,22 +22,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Run 13 anti-freeze regression checks
-        run: python -m unittest discover -s nexus-mqtt/v022/tests -v
+      - name: Run 22 anti-freeze and physical keyboard regression checks
+        run: python -m unittest discover -s nexus-mqtt/v023/tests -v
       - name: Install PlatformIO
         run: python -m pip install --upgrade platformio
-      - name: Compile Cardputer ADV v0.2.2
-        working-directory: nexus-mqtt/v022/firmware
+      - name: Compile Cardputer ADV v0.2.3
+        working-directory: nexus-mqtt/v023/firmware
         run: pio run -e cardputer-adv
       - name: Verify and stage firmware binary
         run: |
           mkdir -p dist
-          test -s nexus-mqtt/v022/firmware/.pio/build/cardputer-adv/firmware.bin
-          cp nexus-mqtt/v022/firmware/.pio/build/cardputer-adv/firmware.bin dist/NEXUS_MQTT_ADV_LAUNCHER_V0_2_2_ANTI_FREEZE.bin
+          test -s nexus-mqtt/v023/firmware/.pio/build/cardputer-adv/firmware.bin
+          cp nexus-mqtt/v023/firmware/.pio/build/cardputer-adv/firmware.bin dist/NEXUS_MQTT_ADV_LAUNCHER_V0_2_3_FLÈCHES_DIRECTES.bin
           sha256sum dist/*.bin > dist/SHA256SUMS.txt
           ls -alh dist
       - uses: actions/upload-artifact@v4
         with:
-          name: nexus-mqtt-cardputer-adv-v022-anti-freeze
+          name: nexus-mqtt-cardputer-adv-v023-navigation-fixed
           path: dist/
           if-no-files-found: error
