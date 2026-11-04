@@ -1,7 +1,7 @@
 // Native Nexus Neon text chat for KVXputer / Cardputer ADV.
 // Adapted from the user's Nexus Neon text-only protocol (HTTP endpoints,
 // authorization, recipient roles and client_id deduplication).
-// No firmware switch, no mic, no Morse, no MQTT, no token in NVS.
+// Nexus V10: no firmware switch, no mic, no Morse, no token in NVS.
 #include "nexus_neon_app.h"
 #include "nexus_neon_secrets.h"
 #include "ca_roots.h"
@@ -22,7 +22,7 @@
 namespace {
 constexpr int kMaxMessages = 24;
 constexpr size_t kMaxText = 220;
-constexpr unsigned long kPollMs = 12000;
+constexpr unsigned long kPollMs = 12000; // background network only, no full-screen timer
 constexpr uint32_t kClockThreshold = 1700000000UL;
 constexpr uint16_t kNeonCyan = 0x07FF;
 constexpr uint16_t kNeonPurple = 0xB09F;
@@ -192,8 +192,10 @@ bool beginOperation(Op op, const String &payload = "") {
         sDirty = true;
         return false;
     }
-    sStatus = op == Op::SEND ? "Envoi HTTPS..." : "Synchronisation HTTPS...";
-    sDirty = true;
+    if(op != Op::FETCH) {
+        sStatus = op == Op::SEND ? "Envoi HTTPS..." : "Verification du serveur...";
+        sDirty = true;
+    }
     return true;
 }
 
@@ -203,6 +205,8 @@ void acceptReply() {
     while (xQueueReceive(sReplyQueue, &rep, 0) == pdTRUE) {
         sBusy = false;
         if (!rep) continue;
+        const int previousCount = sCount;
+        const String previousStatus = sStatus;
         if (rep->generation != sGeneration) {
             delete rep;
             continue;
@@ -256,7 +260,11 @@ void acceptReply() {
         } else if (rep->op == Op::SESSION) {
             sStatus = "Serveur disponible";
         }
-        sDirty = true;
+        // Successful idle polls do not repaint the screen every 12 seconds.
+        // Repaint on actual new messages or a user-requested operation.
+        if(rep->op != Op::FETCH || previousCount != sCount ||
+           (sView == View::STATUS && sStatus != previousStatus))
+            sDirty = true;
         delete rep;
     }
 }
@@ -301,23 +309,76 @@ void paintFrame(const char *title) {
 }
 
 void drawHome() {
-    paintFrame("NEXUS  NEON / TEXTE");
-    const char *labels[4] = {"MESSAGES", "ECRIRE", "WI-FI", "CONTACT"};
-    const uint16_t colors[4] = {kNeonCyan, kNeonPurple, kNeonGreen, kNeonCyan};
-    const int x0 = 9, y0 = 30, w = (tftWidth - 26) / 2, h = 35;
-    for (int i = 0; i < 4; ++i) {
-        const int col = i % 2, row = i / 2;
-        const int x = x0 + col * (w + 8);
-        const int y = y0 + row * 40;
-        uint16_t fill = i == sHome ? 0x3039 : 0x181D;
-        tft.fillRoundRect(x, y, w, h, 6, fill);
-        tft.drawRoundRect(x, y, w, h, 6, i == sHome ? kNeonGreen : colors[i]);
-        tft.setTextColor(i == sHome ? kNeonGreen : colors[i], fill);
-        tft.setTextSize(1);
-        tft.drawCentreString(labels[i], x + w/2, y + 12, 1);
+    // Native port of the V10 Neon horizontal carousel, drawn only on input.
+    static const char *labels[4] = {"MESSAGES","ECRIRE","WI-FI","CONTACT"};
+    static const char *captions[4] = {
+        "Conversations texte","Nouveau message",
+        "Connexion partagee","Alice / Bob"
+    };
+    static const uint16_t dark[4] = {0x080C,0x180C,0x0026,0x0805};
+    static const uint16_t middle[4] = {0x11C8,0x4209,0x1169,0x1287};
+    static const uint16_t accent[4] = {0x05FF,0xC31F,0x07FF,0x3FEA};
+    uint16_t d=dark[sHome],m=middle[sHome],a=accent[sHome];
+    tft.fillScreen(0x080F);
+    for(int y=22;y<114;y+=3) {
+        // Gradient stripe painting is limited to actual page or selection changes.
+        const uint8_t k=(uint8_t)((y-22)*170/92);
+        const uint16_t r=((m>>11&31)*(255-k)+(d>>11&31)*k)/255;
+        const uint16_t g=((m>>5&63)*(255-k)+(d>>5&63)*k)/255;
+        const uint16_t b=((m&31)*(255-k)+(d&31)*k)/255;
+        tft.fillRect(0,y,tftWidth,3,(r<<11)|(g<<5)|b);
     }
+    tft.fillRect(0,0,tftWidth,22,0x080F);
+    tft.fillRoundRect(5,3,17,15,4,a);
+    tft.setTextSize(1);
+    tft.setTextColor(0x0000,a);
+    tft.drawString("N",10,6,1);
+    tft.setTextColor(0xFFFF,0x080F);
+    tft.drawString("NEXUS NEON V10",28,7,1);
+    tft.fillRect(0,20,tftWidth,2,a);
+    const int x=tftWidth/2, y=62;
+    tft.fillRoundRect(x-82,26,164,76,11,d);
+    tft.drawRoundRect(x-82,26,164,76,11,a);
+    tft.fillTriangle(10,65,30,52,30,78,a);
+    tft.fillTriangle(230,65,210,52,210,78,a);
+    tft.fillTriangle(15,65,26,58,26,72,0xFFFF);
+    tft.fillTriangle(225,65,214,58,214,72,0xFFFF);
+    switch(sHome){
+    case 0: // envelope
+        tft.fillRoundRect(x-28,y-19,56,38,5,a);
+        tft.fillRoundRect(x-25,y-16,50,31,3,d);
+        tft.drawLine(x-25,y-15,x,y+5,a);
+        tft.drawLine(x+25,y-15,x,y+5,a);
+        break;
+    case 1: // pencil and compose
+        tft.drawLine(x-30,y+21,x+25,y-25,a);
+        tft.drawLine(x-25,y+26,x+30,y-20,0xFFFF);
+        tft.fillTriangle(x-30,y+21,x-25,y+26,x-37,y+29,a);
+        break;
+    case 2: // network icon
+        tft.fillCircle(x,y+20,6,a);
+        tft.drawLine(x-34,y-10,x,y-29,a);
+        tft.drawLine(x,y-29,x+34,y-10,a);
+        tft.drawLine(x-25,y+1,x,y-13,0xFFFF);
+        tft.drawLine(x,y-13,x+25,y+1,0xFFFF);
+        break;
+    default: // two contacts
+        tft.fillCircle(x-19,y-9,10,a);
+        tft.fillCircle(x+19,y-9,10,0xFFFF);
+        tft.fillRoundRect(x-38,y+5,36,25,9,a);
+        tft.fillRoundRect(x+2,y+5,36,25,9,0xFFFF);
+        break;
+    }
+    tft.fillRoundRect(x-62,87,124,13,3,a);
+    tft.setTextColor(0x0000,a);
+    tft.drawCentreString(labels[sHome],x,89,1);
+    tft.setTextColor(0xFFFF,d);
+    tft.drawCentreString(captions[sHome],x,104,1);
+    tft.fillRect(0,114,tftWidth,21,0x080F);
+    tft.fillRect(0,114,tftWidth,2,a);
+    tft.setTextColor(0xD6BA,0x080F);
+    tft.drawString("< / > Choisir  ENTREE Ouvrir",6,120,1);
 }
-
 void drawMessages() {
     paintFrame(sRecipient == "bob" ? "ALICE > BOB" : "BOB > ALICE");
     tft.setTextSize(1);
@@ -454,9 +515,18 @@ void handleHomeSelect() {
 }
 
 void handleKeys(bool &exitApp) {
-    // Standard KVXputer directional flags: ; , . / without Fn.
-    if (pressed(EscPress)) {
-        if (sView == View::HOME) { exitApp = true; return; }
+    // FN+ESC is the *only* direct exit; a simple ESC goes back in Nexus.
+    // ADV KeyStroke captures FN status at the moment of the key event.
+    keyStroke key = _getKeyPress();
+    bool esc = pressed(EscPress);
+    if ((key.pressed && key.fn && key.exit_key) ||
+        (esc && isFnKeyHeld())) {
+        EscPress = false;
+        exitApp = true;
+        return;
+    }
+    if (esc || (key.pressed && key.exit_key)) {
+        if (sView == View::HOME) return;
         if (sView == View::DETAIL) sView = View::MESSAGES;
         else {
             if (sView == View::CONTACT) sRecipient = sActiveRecipient;
@@ -466,7 +536,7 @@ void handleKeys(bool &exitApp) {
         return;
     }
     if (pressed(UpPress)) {
-        if (sView == View::HOME) sHome = (sHome + 2) % 4;
+        if (sView == View::HOME) sHome = (sHome + 3) % 4;
         else if (sView == View::MESSAGES && sCount) sSelected = max(0, sSelected - 1);
         sDirty = true;
     }
@@ -476,14 +546,14 @@ void handleKeys(bool &exitApp) {
         sDirty = true;
     }
     if (pressed(PrevPress)) {
-        if (sView == View::HOME) sHome = (sHome / 2) * 2;
+        if (sView == View::HOME) sHome = (sHome + 3) % 4;
         else if (sView == View::MESSAGES && !sBusy) beginOperation(Op::FETCH);
         else if (sView == View::CONTACT) sRecipient = sRecipient == "bob" ? "alice" : "bob";
         else if (sView == View::DETAIL && sCount) sSelected = max(0, sSelected - 1);
         sDirty = true;
     }
     if (pressed(NextPress)) {
-        if (sView == View::HOME) sHome = (sHome / 2) * 2 + 1;
+        if (sView == View::HOME) sHome = (sHome + 1) % 4;
         else if (sView == View::MESSAGES && !sBusy) newDraft();
         else if (sView == View::CONTACT) sRecipient = sRecipient == "bob" ? "alice" : "bob";
         else if (sView == View::DETAIL && sCount) sSelected = min(sCount - 1, sSelected + 1);
@@ -523,8 +593,8 @@ void nexusNeonApp() {
     loadContact();
     sGeneration++;
     sCursor = 0; sCount = 0; sSelected = 0;
-    sView = View::HOME; sHome = 0; sDraft = ""; sClientId = "";
-    sStatus = isConfigured() ? "Entree: ouvrir, Esc: quitter" : "Compilation sans jeton";
+    sView = View::HOME; sHome = 0; // Preserve unsent draft on return from KVX.
+    sStatus = isConfigured() ? "FN+ESC: retour KVX" : "Compilation sans jeton";
     sDirty = true;
     sPollAt = millis() + kPollMs;
     // Do not reset sBusy: a previously launched HTTPS request may still be running.
