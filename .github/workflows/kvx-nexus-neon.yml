@@ -68,10 +68,10 @@ jobs:
             -in kvxputer/.pio/build/m5stack-cardputer/firmware.bin \
             -out delivery/KVXputer_NexusV10_MQTTV5.bin.enc \
             -pass env:NEXUS_SHARED_TOKEN
-          test -s delivery/KVXputer_Nexus_Neon_Text.bin.enc
+          test -s delivery/KVXputer_NexusV10_MQTTV5.bin.enc
           # Confirm decryptability without ever exposing secret or plaintext.
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 \
-            -in delivery/KVXputer_Nexus_Neon_Text.bin.enc \
+            -in delivery/KVXputer_NexusV10_MQTTV5.bin.enc \
             -out /tmp/kvx-roundtrip.bin -pass env:NEXUS_SHARED_TOKEN
           cmp -s /tmp/kvx-roundtrip.bin kvxputer/.pio/build/m5stack-cardputer/firmware.bin
           shred -u /tmp/kvx-roundtrip.bin || rm -f /tmp/kvx-roundtrip.bin
@@ -79,6 +79,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: KVXputer-NexusV10-MQTTV5-Encrypted
-          path: delivery/KVXputer_Nexus_Neon_Text.bin.enc
+          path: delivery/KVXputer_NexusV10_MQTTV5.bin.enc
           retention-days: 1
           if-no-files-found: error
