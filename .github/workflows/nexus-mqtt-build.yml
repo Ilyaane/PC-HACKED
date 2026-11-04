@@ -1,0 +1,43 @@
+name: Build NEXUS MQTT Cardputer ADV
+on:
+  push:
+    branches:
+      - nexus-mqtt-standalone-20261103
+    paths:
+      - 'nexus-mqtt/**'
+      - '.github/workflows/nexus-mqtt-build.yml'
+  pull_request:
+    paths:
+      - 'nexus-mqtt/**'
+      - '.github/workflows/nexus-mqtt-build.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run 22 anti-freeze and physical keyboard regression checks
+        run: python -m unittest discover -s nexus-mqtt/v023/tests -v
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+      - name: Compile Cardputer ADV v0.2.3
+        working-directory: nexus-mqtt/v023/firmware
+        run: pio run -e cardputer-adv
+      - name: Verify and stage firmware binary
+        run: |
+          mkdir -p dist
+          test -s nexus-mqtt/v023/firmware/.pio/build/cardputer-adv/firmware.bin
+          cp nexus-mqtt/v023/firmware/.pio/build/cardputer-adv/firmware.bin dist/NEXUS_MQTT_ADV_LAUNCHER_V0_2_3_FLÈCHES_DIRECTES.bin
+          sha256sum dist/*.bin > dist/SHA256SUMS.txt
+          ls -alh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-mqtt-cardputer-adv-v023-navigation-fixed
+          path: dist/
+          if-no-files-found: error
