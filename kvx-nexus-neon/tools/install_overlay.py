@@ -76,10 +76,10 @@ def install(kvx: Path, nexus: Path, token: str) -> None:
     platformio_ini = kvx / "platformio.ini"
     pio_text = platformio_ini.read_text(encoding="utf-8")
     if "256dpi/MQTT@2.5.2" not in pio_text:
-        dep_anchor = "\tmikalhart/TinyGPSPlus"
+        dep_anchor = "\tmikalhart/TinyGPSPlus\n"
         assert pio_text.count(dep_anchor) == 1, "Unexpected upstream lib_deps"
         platformio_ini.write_text(pio_text.replace(dep_anchor,
-             dep_anchor + "\n\t256dpi/MQTT@2.5.2", 1), encoding="utf-8")
+             dep_anchor + "\t256dpi/MQTT@2.5.2\n", 1), encoding="utf-8")
 
 
     # A blank token permits typechecking/compiling, but network operations
