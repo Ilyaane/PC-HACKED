@@ -62,6 +62,7 @@ uint32_t sCursor = 0;
 View sView = View::HOME;
 int sHome = 0;
 String sRecipient = "bob";
+String sActiveRecipient = "bob";  // Role whose inbox and cursor are currently displayed.
 String sDraft;
 String sClientId;
 String sStatus = "Pret";
@@ -141,12 +142,16 @@ void doHttp(void *raw) {
                     rep->code = http.GET();
                 }
                 // Limit parsing memory, and never trust server-controlled large bodies.
-                if (rep->code >= 200 && rep->code < 300 &&
-                    http.getSize() <= 16384) {
-                    rep->payload = http.getString();
-                    if (rep->payload.length() > 16384) {
-                        rep->payload = "";
+                if (rep->code >= 200 && rep->code < 300) {
+                    if (http.getSize() > 16384) {
+                        // Explicit size guard: do not report a large body as HTTP 200.
                         rep->code = -6;
+                    } else {
+                        rep->payload = http.getString();
+                        if (rep->payload.length() > 16384) {
+                            rep->payload = "";
+                            rep->code = -6;
+                        }
                     }
                 }
                 http.end();
@@ -209,6 +214,7 @@ void acceptReply() {
                       rep->code == -6 ? "Reponse trop volumineuse" :
                       "Reseau / serveur: " + String(rep->code);
         } else if (rep->op == Op::FETCH) {
+            bool fullPage = false;
             JsonDocument doc;
             if (deserializeJson(doc, rep->payload)) {
                 sStatus = "Reponse JSON invalide";
@@ -218,6 +224,9 @@ void acceptReply() {
                     sStatus = "Format des messages inconnu";
                 } else {
                     int added = 0;
+                    // The Worker returns at most ten messages per page. Drain
+                    // older pending pages promptly instead of one every 12 s.
+                    fullPage = incoming.size() >= 10;
                     for (JsonObject item : incoming) {
                         uint32_t id = item["id"] | 0u;
                         if (id == 0 || id <= sCursor) continue;
@@ -235,7 +244,7 @@ void acceptReply() {
                     sStatus = added ? String(added) + " nouveau(x) message(s)" : "Messages a jour";
                 }
             }
-            sPollAt = millis() + kPollMs;
+            sPollAt = millis() + (fullPage ? 400UL : kPollMs);
         } else if (rep->op == Op::SEND) {
             // Preserve the draft and idempotency key on uncertain errors.
             addHistory(0, ownRole(sRecipient), printable(sDraft), true);
@@ -253,11 +262,14 @@ void acceptReply() {
 }
 
 void loadContact() {
+    sRecipient = "bob";  // Deterministic fallback if Preferences cannot be opened.
     Preferences prefs;
-    if (!prefs.begin("nexusneon", true)) return;
-    const String saved = prefs.getString("contact", "bob");
-    prefs.end();
-    sRecipient = saved == "alice" ? "alice" : "bob";
+    if (prefs.begin("nexusneon", true)) {
+        const String saved = prefs.getString("contact", "bob");
+        prefs.end();
+        sRecipient = saved == "alice" ? "alice" : "bob";
+    }
+    sActiveRecipient = sRecipient;
 }
 
 void saveContact() {
@@ -446,7 +458,10 @@ void handleKeys(bool &exitApp) {
     if (pressed(EscPress)) {
         if (sView == View::HOME) { exitApp = true; return; }
         if (sView == View::DETAIL) sView = View::MESSAGES;
-        else sView = View::HOME;
+        else {
+            if (sView == View::CONTACT) sRecipient = sActiveRecipient;
+            sView = View::HOME;
+        }
         sDirty = true;
         return;
     }
@@ -478,7 +493,22 @@ void handleKeys(bool &exitApp) {
         if (sView == View::HOME) handleHomeSelect();
         else if (sView == View::MESSAGES && sCount) sView = View::DETAIL;
         else if (sView == View::CONFIRM) sendDraft();
-        else if (sView == View::CONTACT) { saveContact(); sView = View::HOME; }
+        else if (sView == View::CONTACT) {
+            if (sActiveRecipient != sRecipient) {
+                // Do not show Bob's messages under Alice's identity (or vice versa).
+                // Pending responses from the previous role are discarded by generation.
+                ++sGeneration;
+                sCount = 0;
+                sSelected = 0;
+                sCursor = 0;
+                sDraft = "";
+                sClientId = "";
+                sPollAt = millis();
+                sActiveRecipient = sRecipient;
+            }
+            saveContact();
+            sView = View::HOME;
+        }
         else if (sView == View::STATUS && !sBusy) sView = View::HOME;
         sDirty = true;
     }
