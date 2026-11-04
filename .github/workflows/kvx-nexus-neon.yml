@@ -1,9 +1,10 @@
-name: KVXputer Nexus Neon native integration tests
+name: KVXputer Nexus V10 + MQTT V5 integration tests
 on:
   push:
     branches:
       - kvx-nexus-neon-text-integration-20261103
       - kvx-plus-audit-stabilite-20261104
+      - kvx-nexus-v10-mqtt-v5-20261104
     paths:
       - 'kvx-nexus-neon/**'
       - '.github/workflows/kvx-nexus-neon.yml'
@@ -65,7 +66,7 @@ jobs:
           mkdir -p delivery
           openssl enc -aes-256-cbc -salt -pbkdf2 -iter 300000 \
             -in kvxputer/.pio/build/m5stack-cardputer/firmware.bin \
-            -out delivery/KVXputer_Nexus_Neon_Text.bin.enc \
+            -out delivery/KVXputer_NexusV10_MQTTV5.bin.enc \
             -pass env:NEXUS_SHARED_TOKEN
           test -s delivery/KVXputer_Nexus_Neon_Text.bin.enc
           # Confirm decryptability without ever exposing secret or plaintext.
@@ -77,7 +78,7 @@ jobs:
       - name: Upload encrypted image (no plaintext token in public artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: KVXputer-Nexus-Neon-Text-Encrypted
+          name: KVXputer-NexusV10-MQTTV5-Encrypted
           path: delivery/KVXputer_Nexus_Neon_Text.bin.enc
           retention-days: 1
           if-no-files-found: error
