@@ -124,7 +124,7 @@ def install(kvx: Path, nexus: Path, token: str) -> None:
         '#endif\n'
     )
     # On the 240x135 display the last KVX page has three columns/two rows:
-    # Nexus is position 21, MQTT position 22 (row directly below, left side).
+    # Nexus is position 21, MQTT position 22 (same column, directly below Nexus).
     if entry not in text:
         reg.write_text(text[:line_end] + entry + mqtt_entry + text[line_end:], encoding="utf-8")
     elif mqtt_entry not in text:

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 import struct
+import hashlib
 import sys
 
 root = Path(sys.argv[1])
@@ -21,5 +22,6 @@ with (root / "tools/build/partitions/custom_8Mb.csv").open() as file:
 assert app_slots, "No app partition found in KVXputer partition table"
 limit = min(size for name,size in app_slots)
 assert len(data) <= limit, f"Image {len(data)} > app partition {limit}"
-print(f"ESP32 application image valid; size {len(data)} bytes; app partition {limit} bytes")
+print(f"ESP32 application image header valid; size {len(data)} bytes; app partition {limit} bytes")
+print("SHA-256 app:", hashlib.sha256(data).hexdigest())
 print("REMINDER: no physical tests have been performed")

@@ -82,6 +82,10 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn("M5Cardputer.", text)
         self.assertNotIn("WiFi.begin(", text)
         self.assertNotIn("setInsecure(", text)
+        self.assertNotIn("ESP.restart()", text)
+        self.assertNotIn("d.startWrite()", text)
+        self.assertNotIn("d.endWrite()", text)
+        self.assertIn("pendingReconfigure", text)
         self.assertNotIn("#include <Preferences.h>", text)
         self.assertNotIn("prefs.putString", text)
 

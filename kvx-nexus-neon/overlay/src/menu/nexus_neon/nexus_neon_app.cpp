@@ -541,7 +541,7 @@ void handleKeys(bool &exitApp) {
         sDirty = true;
     }
     if (pressed(DownPress)) {
-        if (sView == View::HOME) sHome = (sHome + 2) % 4;
+        if (sView == View::HOME) sHome = (sHome + 1) % 4;
         else if (sView == View::MESSAGES && sCount) sSelected = min(sCount - 1, sSelected + 1);
         sDirty = true;
     }
