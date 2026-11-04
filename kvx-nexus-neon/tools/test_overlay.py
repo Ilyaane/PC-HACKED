@@ -17,6 +17,8 @@ class InstallTests(unittest.TestCase):
         (self.kvx / "src/root/ui/main_menu.h").write_text(
             '#include "menu/discovery/discovery_menu.h"\n'
             '    DiscoveryMenu discoveryMenu;\n', encoding="utf-8")
+        (self.kvx / "platformio.ini").write_text(
+            "[env]\nlib_deps =\n\tmikalhart/TinyGPSPlus\n", encoding="utf-8")
         (self.kvx / "src/root/ui/menu_registry.cpp").write_text(
             'const MenuDescriptor kMenus[] = {\n'
             '    {"config", "Config", &mainMenu.configMenu, MENU_FLAG_NONE},\n'
@@ -34,8 +36,15 @@ class InstallTests(unittest.TestCase):
         registry = (self.kvx / "src/root/ui/menu_registry.cpp").read_text()
         self.assertEqual(menu.count("NexusNeonMenu nexusNeonMenu"), 1)
         self.assertEqual(registry.count('"nexus-neon"'), 1)
+        self.assertEqual(registry.count('"kvx-mqtt"'), 1)
+        self.assertLess(registry.index('"nexus-neon"'), registry.index('"kvx-mqtt"'))
         self.assertGreater(registry.index('"nexus-neon"'), registry.index('"config"'))
         self.assertTrue((self.kvx / "src/menu/nexus_neon/nexus_neon_app.cpp").is_file())
+        self.assertTrue((self.kvx / "src/menu/kvx_mqtt/kvx_mqtt_app.cpp").is_file())
+        self.assertEqual((self.kvx / "platformio.ini").read_text().count("256dpi/MQTT@2.5.2"), 1)
+        self.assertIn("KvxMqttMenu kvxMqttMenu", menu)
+        self.assertIn('#define KVX_MQTT_HOST ""',
+                      (self.kvx / "src/menu/kvx_mqtt/kvx_mqtt_private.h").read_text())
         self.assertIn('#define NEXUS_NEON_SHARED_TOKEN ""',
                       (self.kvx / "src/menu/nexus_neon/nexus_neon_secrets.h").read_text())
 
@@ -58,6 +67,23 @@ class InstallTests(unittest.TestCase):
         code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
         self.assertNotIn("MQTT", code)
         self.assertNotIn("prefs.putString(\"token\"", text)
+        self.assertIn("key.fn && key.exit_key", text)
+        self.assertIn("NEXUS NEON V10", text)
+        self.assertIn("if(rep->op != Op::FETCH", text)
+
+    def test_mqtt_native_and_no_wifi_ownership(self):
+        text = (ROOT / "overlay/src/menu/kvx_mqtt/kvx_mqtt_app.cpp").read_text()
+        self.assertIn("KVX_MQTT_HOST", text)
+        self.assertIn("SD.open(CONFIG_FILE", text)
+        self.assertIn("k.fn && k.exit_key", text)
+        self.assertIn("workerFinished.store(true)", text)
+        self.assertNotIn("void setup()", text)
+        self.assertNotIn("void loop()", text)
+        self.assertNotIn("M5Cardputer.", text)
+        self.assertNotIn("WiFi.begin(", text)
+        self.assertNotIn("setInsecure(", text)
+        self.assertNotIn("#include <Preferences.h>", text)
+        self.assertNotIn("prefs.putString", text)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
