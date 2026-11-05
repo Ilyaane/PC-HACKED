@@ -1,4 +1,4 @@
-name: KVXputer Nexus V10 + MQTT V5 stabilized / compact UI
+name: KVXputer Core BLE Suite + compact Nexus WiFi integration
 on:
   push:
     branches:
@@ -6,6 +6,7 @@ on:
       - kvx-plus-audit-stabilite-20261104
       - kvx-nexus-v10-mqtt-v5-20261104
       - kvx-nexus-mqtt-fixes-fonts-20261105
+      - kvx-core-ble-suite-nexus-wifi-20261105
     paths:
       - 'kvx-nexus-neon/**'
       - '.github/workflows/kvx-nexus-neon.yml'
@@ -50,6 +51,8 @@ jobs:
           python kvx-nexus-neon/tools/patch_fastled.py kvxputer/tools/build/patch_library_conflicts.py
           python kvx-nexus-neon/tools/patch_ble_font.py kvxputer
           python kvx-nexus-neon/tools/patch_wifi_reliability.py kvxputer
+          python kvx-nexus-neon/tools/patch_compact_wifi_ui.py kvxputer
+          python kvx-nexus-neon/tools/patch_ble_suite_stability.py kvxputer
       - name: Install PlatformIO
         run: python -m pip install --disable-pip-version-check platformio
       - name: Clean-build full KVXputer Cardputer ADV
