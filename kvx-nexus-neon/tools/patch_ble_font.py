@@ -16,10 +16,10 @@ display_path = root / "src/root/ui/display.cpp"
 ui = ui_path.read_text(encoding="utf-8")
 needle = "static void drawKvxSubmenuRow("
 assert ui.count(needle) == 1, "Unexpected KVX submenu drawing code"
-ui = ui.replace(needle, "static constexpr int kKvxMenuFont = 1;\\n\\n" + needle, 1)
-old = "    tft.setTextSize(FM);\\n    if (!options[i].enabled)"
+ui = ui.replace(needle, "static constexpr int kKvxMenuFont = 1;\n\n" + needle, 1)
+old = "    tft.setTextSize(FM);\n    if (!options[i].enabled)"
 assert ui.count(old) == 1, "Expected row text-size anchor missing"
-ui = ui.replace(old, "    tft.setTextSize(kKvxMenuFont);\\n    if (!options[i].enabled)", 1)
+ui = ui.replace(old, "    tft.setTextSize(kKvxMenuFont);\n    if (!options[i].enabled)", 1)
 old = """    const int lineH = FM * LH + 4;
     const int startY = KVX_TOPBAR_H + 4;
     const int visible = max(1, (tftHeight - startY - 6) / lineH);
@@ -52,13 +52,13 @@ beg = display.index("Opt_Coord drawOptions(")
 end = display.index("void drawSubmenu(", beg)
 segment = display[beg:end]
 assert "tft.setTextSize(FM)" in segment
-segment = re.sub(r"\\bFM\\b", "1", segment)
+segment = re.sub(r"\bFM\b", "1", segment)
 display = display[:beg] + segment + display[end:]
 beg = display.index("Opt_Coord listFiles(")
 end = display.index("void drawSdSmall(", beg)
 segment = display[beg:end]
 assert "tft.setTextSize(FM)" in segment
-segment = re.sub(r"\\bFM\\b", "1", segment)
+segment = re.sub(r"\bFM\b", "1", segment)
 display = display[:beg] + segment + display[end:]
 display_path.write_text(display, encoding="utf-8")
 print("KVX shared submenus, file lists and regular option dialogs: compact 1x font; custom screens unchanged.")
