@@ -68,6 +68,27 @@ def patch(root: Path) -> None:
         "BLE exit memory cleanup"
     )
 
+    # "clear()" leaves vector capacities allocated in internal RAM. Give
+    # this memory back when leaving the suite so Nexus/MQTT aren't starved.
+    suite = replace_once(
+        suite,
+        '        deviceNames.clear();\n'
+        '        deviceAddresses.clear();\n'
+        '        deviceRssi.clear();\n'
+        '        deviceFastPair.clear();\n'
+        '        deviceHasHFP.clear();\n'
+        '        deviceTypes.clear();\n'
+        '        foundCount = 0;',
+        '        deviceNames.clear(); deviceNames.shrink_to_fit();\n'
+        '        deviceAddresses.clear(); deviceAddresses.shrink_to_fit();\n'
+        '        deviceRssi.clear(); deviceRssi.shrink_to_fit();\n'
+        '        deviceFastPair.clear(); deviceFastPair.shrink_to_fit();\n'
+        '        deviceHasHFP.clear(); deviceHasHFP.shrink_to_fit();\n'
+        '        deviceTypes.clear(); deviceTypes.shrink_to_fit();\n'
+        '        foundCount = 0;',
+        "BLE scanner cache releases RAM when cleared"
+    )
+
     # A welcome animation is not a reason to freeze keyboard input for two
     # seconds, especially on the tiny Cardputer screen.
     suite = replace_once(
