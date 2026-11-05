@@ -51,7 +51,8 @@ welcome = ble.split("void showWelcomeScreen()", 1)[1].split("void BleSuiteMenu()
 assert "delay(2000);" not in welcome
 assert "delay(120);" in welcome
 assert "stopBLEStack(); // Deinit + release the UI RAM reservation." in scan_init
-assert "if (is_ble_inited || BLEConnected)" in common
+assert "if (scanOwnedMemory || hidOwnedMemory || suiteOwnedMemory)" in common
+assert "if (scanOwnedMemory || (hidOwnedMemory && !suiteOwnedMemory))" in common
 assert "stopBLEStack();" in ble_menu
 assert "BLEDevice::deinit();" not in ble_menu.split("void BleMenu::optionsMenu()", 1)[1].split("void BleMenu::drawIcon", 1)[0]
 clear = ble.split("void ScannerData::clear()", 1)[1].split("size_t ScannerData::size()", 1)[0]
