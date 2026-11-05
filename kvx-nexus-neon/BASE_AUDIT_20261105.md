@@ -14,8 +14,9 @@ La livraison s'effectue au moyen de correctifs appliqués à un checkout tempora
 |---|---|---|
 | BLE Suite / RAM | `initBLE()` était réexécuté alors que NimBLE était déjà initialisé ; chaque appel ajoutait une réservation `uiRamEnterHeavy()`. `deinitBLE()` n'appelait pas son inverse. | Initialisation idempotente ; libération `uiRamLeaveHeavy()` à la fin de la session et après échec d'initialisation |
 | BLE Suite / entrée | `BleSuiteMenu()` ignorait le booléen retourné par l'initialisation BLE et pouvait afficher un menu inutilisable. | Abandon explicite du module en cas d'échec |
-| BLE Suite / affichage | `(tftHeight-80)/25` laisse seulement 2 lignes sur un écran 135 px. | Police 1x, lignes 12 px, 6 options visibles sans chevauchement avec le pied de page |
+| BLE Suite / affichage | `(tftHeight-80)/25` laisse seulement 2 lignes sur un écran 135 px. | Police 1x, lignes 12 px, 6 options visibles dans le menu principal **et les sous-menus** sans chevauchement avec le pied de page |
 | BLE Suite / accueil | Écran d'accueil bloquant pendant 2000 ms. | Réduction à 120 ms |
+| BLE Suite / navigation | Les sous-menus avaient les mêmes lignes de 25 px et ne vérifiaient pas les listes vides ; l'écran de la suite ignorait les demandes globales de sortie. | Sous-menus compacts, retour sûr sur menu vide, sortie forcée prise en compte et diagnostic RAM série |
 | BLE Suite / mémoire des scans | `std::vector::clear()` conserve normalement sa capacité ; les tableaux d'appareils scannés pouvaient garder de la RAM allouée en quittant le module. | `shrink_to_fit()` des six vecteurs, après nettoyage protégé par mutex |
 | BLE commun / erreur de scanner | Après échec d'obtention de l'objet `BLEScan`, la fonction retournait sans libérer explicitement sa réservation de ressources. | Passage par `stopBLEStack()` avant retour d'erreur |
 | Bluetooth / Déconnecter | L'option utilisait une procédure de fermeture différente du nettoyage commun ; le nettoyage dépendait du drapeau `is_ble_inited`, pas toujours présent pour HID. | Procédure unique `stopBLEStack()`, prenant également en compte `BLEConnected` |
