@@ -61,6 +61,13 @@ assert 'RAM_LOG("ble-suite exit")' in menu
 assert '#include "root/app/ram_profile.h"' in ble
 for label in expected_labels:
     assert menu.count(f'"{label}"') == 1, f"Missing/duplicated BLE Suite menu entry: {label}"
+sub = ble.split("int showSubMenu(const char *title, const char *options[], int optionCount)", 1)[1].split("// Attack Submenus", 1)[0]
+assert "if (optionCount <= 0 || options == nullptr) return -1;" in sub
+assert "const int rowHeight = 12;" in sub
+assert "const int firstRowY = 31;" in sub
+assert "int maxVisible = (tftHeight - 80) / 25" not in sub
+assert "if (forceHome || returnToMenu || check(EscPress)) return -1;" in sub
+assert "shortTitle.substring" in sub
 assert "executeAttackWithTargetScan(selected)" in menu
 assert "BLE_Sniffer()" in menu
 print(
