@@ -72,6 +72,8 @@ String sRecipient = "bob";
 String sActiveRecipient = "bob";  // Role whose inbox and cursor are currently displayed.
 String sDraft;
 String sClientId;
+// Keep unsent drafts and retry IDs separate for Alice and Bob.
+String sDraftAlice, sDraftBob, sIdAlice, sIdBob;
 String sStatus = "Pret";
 bool sDirty = true;
 unsigned long sPollAt = 0;
@@ -677,8 +679,15 @@ void handleKeys(bool &exitApp) {
                 sCount = 0;
                 sSelected = 0;
                 sCursor = 0;
-                sDraft = "";
-                sClientId = "";
+                if (sActiveRecipient=="bob") {
+                    sDraftBob=sDraft;
+                    sIdBob=sClientId;
+                } else {
+                    sDraftAlice=sDraft;
+                    sIdAlice=sClientId;
+                }
+                sDraft=sRecipient=="bob"?sDraftBob:sDraftAlice;
+                sClientId=sRecipient=="bob"?sIdBob:sIdAlice;
                 sPollAt = millis();
                 sActiveRecipient = sRecipient;
             }
