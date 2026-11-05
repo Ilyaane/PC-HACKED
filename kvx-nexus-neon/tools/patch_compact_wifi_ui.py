@@ -37,6 +37,30 @@ static void wifiCompactNotice(const String &title, const String &detail) {
 """
 change(anchor,helper+anchor)
 
+# Start the scan asynchronously, return to the event loop between checks, and
+# allow ESC cancellation. A driver which never reports completion cannot freeze
+# the UI for an unbounded period.
+scan_helper="""static int wifiScanWithCancel() {
+    int result=WiFi.scanNetworks(true); // asynchronous scan
+    if (result>=0) return result;
+    if (result < -1) return -2;
+    const uint32_t begin=millis();
+    while (millis()-begin < 15000U) {
+        if (check(EscPress)) { WiFi.scanDelete(); return -3; }
+        result=WiFi.scanComplete();
+        if (result>=0) return result;
+        if (result < -1) { WiFi.scanDelete(); return -2; }
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+    WiFi.scanDelete();
+    return -2; // bounded timeout
+}
+
+"""
+change("bool _wifiConnect(const String &ssid, int encryption) {",
+       scan_helper+"bool _wifiConnect(const String &ssid, int encryption) {")
+
+
 old="""    RAM_LOG("wifi pre-mode"); // Wi-Fi is already up from the menu scan by this point
     drawMainBorderWithTitle("WiFi Connect");
     padprintln("");
@@ -85,5 +109,9 @@ change('                displayTextLine("Scanning..");',
        '                wifiCompactNotice("WI-FI / Recherche", "Detection des reseaux...");')
 change('    displayTextLine("Scanning Networks..");',
        '    wifiCompactNotice("WI-FI / Recherche", "Reseaux enregistres...");')
+# Only the interactive scan is changed; background reconnect stays in KVX.
+change('                nets = WiFi.scanNetworks();',
+       '''                nets = wifiScanWithCancel();
+                if (nets == -3) { wifiDisconnect(); return false; }''')
 path.write_text(s,encoding="utf-8")
 print("Compact Wi-Fi search/connect UI and cancellable association, radio/credentials preserved.")
