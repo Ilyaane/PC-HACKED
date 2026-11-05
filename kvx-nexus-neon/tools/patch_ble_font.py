@@ -44,10 +44,12 @@ old = "#define MAX_MENU_SIZE max(1, (int)(tftHeight / uiRowH(FM)))"
 assert display.count(old) == 1, "Regular options capacity anchor missing"
 display = display.replace(old,
     "#define MAX_MENU_SIZE max(1, (int)(tftHeight / uiRowH(1)))", 1)
-old = "const int nchars = max(1, (tftWidth - 12) / (FM * LW));"
-assert display.count(old) == 2, "Marquee and files must agree on the font size"
-display = display.replace(old,
-    "const int nchars = max(1, (tftWidth - 12) / (1 * LW));")
+for old in (
+    "const int nchars = max(1, (tftWidth - 12) / (FM * LW));",
+    "int nchars = max(1, (tftWidth - 12) / (FM * LW));",
+):
+    assert display.count(old) == 1, "Expected unique compact menu width anchor"
+    display = display.replace(old, old.replace("FM * LW", "1 * LW"), 1)
 beg = display.index("Opt_Coord drawOptions(")
 end = display.index("void drawSubmenu(", beg)
 segment = display[beg:end]
