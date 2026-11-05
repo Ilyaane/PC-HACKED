@@ -89,5 +89,39 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn("#include <Preferences.h>", text)
         self.assertNotIn("prefs.putString", text)
 
+    def test_mqtt_config_editor_and_lazy_sd(self):
+        code = (ROOT / "overlay/src/menu/kvx_mqtt/kvx_mqtt_app.cpp").read_text()
+        self.assertIn('#include "root/storage/sd_functions.h"', code)
+        self.assertIn("sdOK=setupSdCard() && sdcardMounted", code)
+        self.assertIn('SD.open(CONFIG_FILE,FILE_READ)', code)
+        self.assertIn('String typed=keyboard(editBuf,110,prompt,false)', code)
+        self.assertIn('if(typed!=String("\\x1B"))', code)
+        self.assertIn('currentPage=Page::Settings;', code)
+        self.assertIn('MQTT: hote, compte ou a/b invalide', code)
+        # No raw character event is inserted into the 8 config fields.
+        fields = code.split('void onKey(')[1].split('void keyPress(')[0]
+        setting_branch = fields.split('if(currentPage==Page::Settings)')[1].split('}else if(currentPage==Page::Home)')[0]
+        self.assertNotIn('editBuf+=typed', setting_branch)
+        last = code.split('void finishSetting()')[1].split('void navigateHistory(')[0]
+        self.assertNotIn('settingsIdx=0', last)
+
+    def test_nexus_allocations_do_not_deadlock(self):
+        code = (ROOT / "overlay/src/menu/nexus_neon/nexus_neon_app.cpp").read_text()
+        self.assertNotIn('ESP.getFreeHeap() < 43000', code)
+        self.assertIn('heap_caps_get_largest_free_block', code)
+        self.assertIn('req->response = new (std::nothrow) NetReply()', code)
+        self.assertIn('sBusy.store(false)', code)
+        self.assertIn('std::atomic<bool> sBusy', code)
+        self.assertIn('kWorkerStack + 2048U', code)
+        self.assertIn('vTaskDelete(nullptr)', code)
+
+    def test_ble_compact_font_is_reference_for_all_menus(self):
+        script = (ROOT / 'tools/patch_ble_font.py').read_text()
+        self.assertIn('static constexpr int kKvxMenuFont = 1', script)
+        self.assertIn('segment = re.sub', script)
+        self.assertIn('display.index("Opt_Coord listFiles(")', script)
+        self.assertIn('display.index("Opt_Coord drawOptions(")', script)
+        self.assertIn('uiRowH(1)', script)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
