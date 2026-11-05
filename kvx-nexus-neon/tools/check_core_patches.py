@@ -36,6 +36,17 @@ require("uiRowH(1)" in display,"regular option density")
 require("heap_caps_get_largest_free_block" in nexus,"Nexus contiguous heap guard")
 require("sdOK=setupSdCard() && sdcardMounted;" in mqtt,"MQTT lazy SD init")
 require('String typed=keyboard(editBuf,110,prompt,false);' in mqtt,"MQTT native editor")
+require('wifiDisconnect();\n    }\n    vTaskDelete(NULL);' in wifi,"WiFi auto task closes failed sessions")
+require('if (!wifiConnected && !WiFi.isConnected())' in wifi,"WiFi foreground session cleanup")
+require('if (!NimBLEDevice::init(nameStr))' in ble,"BLE initialized status checked")
+require('if (NimBLEDevice::isInitialized()) return true;' in ble,"BLE stale state checked")
+require('const bool genericBleHeldRam = is_ble_inited;' in generic,"BLE generic lease ownership")
+require('if (genericBleHeldRam) uiRamLeaveHeavy();' in generic,"BLE generic lease release guarded")
+require('std::shared_ptr<DeviceSnapshot> ScannerData::getSnapshot()' in ble,"BLE owned scan snapshots")
+require('auto snapshot = scannerData.getSnapshot();' in ble,"BLE snapshot callers own references")
+require('std::shared_ptr<DeviceSnapshot> snapshotCache;' in content("src/menu/ble/BLE_Suite.h"),"BLE cache has owned lifetime")
+require('bool connected=wifiConnectMenu();' in mqtt,"MQTT user can reconnect KVX WiFi")
+
 
 # This quality gate verifies structure, not the physical radio or network.
 print("PASS: BLE scan lifecycle, memory bounds, compact menus, Wi-Fi cancel, MQTT/Nexus integration")
