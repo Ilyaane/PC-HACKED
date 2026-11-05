@@ -18,8 +18,10 @@ def replace_once(src: str, old: str, new: str, context: str) -> str:
 def patch(root: Path) -> None:
     suite_path = root / "src/menu/ble/BLE_Suite.cpp"
     common_path = root / "src/menu/ble/ble_common.cpp"
+    ble_menu_path = root / "src/menu/ble/ble_menu.cpp"
     suite = suite_path.read_text(encoding="utf-8")
     common = common_path.read_text(encoding="utf-8")
+    ble_menu = ble_menu_path.read_text(encoding="utf-8")
 
     # Calling initBLE() repeatedly must not consume one extra UI memory
     # suppression reference each time, nor tear down a working Wi-Fi link.
@@ -209,6 +211,26 @@ def patch(root: Path) -> None:
         '    }',
         "BLE scan failed allocation cleanup"
     )
+    # The root Bluetooth menu used a separate ad-hoc deinit path.
+    # Route its Disconnect action through the one shared cleanup function.
+    ble_menu = replace_once(
+        ble_menu,
+        '                               BLEDevice::deinit();\n'
+        '                               BLEConnected = false;\n'
+        '                               delete hid_ble;\n'
+        '                               hid_ble = nullptr;',
+        '                               stopBLEStack();',
+        "Bluetooth menu shared teardown"
+    )
+    # A BLE HID session can mark BLEConnected without setting the legacy
+    # scan-only is_ble_inited flag, so Disconnect must still deinit its stack.
+    common = replace_once(
+        common,
+        '    if (is_ble_inited) {',
+        '    if (is_ble_inited || BLEConnected) {',
+        "Bluetooth disconnect catches non-scan BLE sessions"
+    )
+    ble_menu_path.write_text(ble_menu, encoding="utf-8")
     suite_path.write_text(suite, encoding="utf-8")
     common_path.write_text(common, encoding="utf-8")
     print("BLE Suite: compact six-row menu and matched init/deinit memory reservations")
