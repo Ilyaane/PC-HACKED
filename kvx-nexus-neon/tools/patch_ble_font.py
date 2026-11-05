@@ -46,7 +46,7 @@ display = display.replace(old,
     "#define MAX_MENU_SIZE max(1, (int)(tftHeight / uiRowH(1)))", 1)
 for old in (
     "const int nchars = max(1, (tftWidth - 12) / (FM * LW));",
-    "int nchars = max(1, (tftWidth - 12) / (FM * LW));",
+    "    int nchars = max(1, (tftWidth - 12) / (FM * LW));",
 ):
     assert display.count(old) == 1, "Expected unique compact menu width anchor"
     display = display.replace(old, old.replace("FM * LW", "1 * LW"), 1)
