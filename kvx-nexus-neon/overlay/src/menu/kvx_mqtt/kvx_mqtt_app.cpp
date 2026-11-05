@@ -48,7 +48,7 @@ enum class Page : uint8_t { Home, Chat, History, Detail, Network, Settings };
 Page currentPage=Page::Home;
 uint8_t selectedTile=0;
 int selectedHistory=0;
-bool revealPassword=true;
+bool revealPassword=false;
 const uint16_t C_BG=0x0843, C_BAR=0x1087, C_PANEL=0x194A;
 const uint16_t C_CYAN=0x3E7F, C_GREEN=0x562D, C_PURPLE=0xA2FA;
 const uint16_t C_ORANGE=0xFD46, C_WHITE=0xFFFF, C_MUTED=0x9C9A;
@@ -94,7 +94,7 @@ void setValue(const String &key, const String &val){
   else if(key=="password")cfg.pass=val;
   else if(key=="device_id")cfg.id=val;
   else if(key=="peer_id")cfg.peer=val;
-  else if(key=="port") {int p=val.toInt();if(p>0&&p<65536)cfg.port=(uint16_t)p;}
+  else if(key=="port") {int p=val.toInt();cfg.port=(p>0&&p<65536)?(uint16_t)p:0;}
 }
 const char *settingKey(uint8_t n){
   static const char* keys[]={"wifi_ssid","wifi_password","host","port","username","password","device_id","peer_id"};
@@ -102,7 +102,7 @@ const char *settingKey(uint8_t n){
 }
 bool configIsValid(){
   return cfg.host.length() && cfg.user.length() &&
-         cfg.pass.length() && validNode(cfg.id) && validNode(cfg.peer) && cfg.id!=cfg.peer;
+         cfg.pass.length() && cfg.port>0 && validNode(cfg.id) && validNode(cfg.peer) && cfg.id!=cfg.peer;
 }
 bool loadConfig(){
   // Fallback values are private build configuration. If an existing
@@ -113,6 +113,8 @@ bool loadConfig(){
   if (!sdOK) return configIsValid();
   File f=SD.open(CONFIG_FILE,FILE_READ);
   if(!f)return configIsValid();
+  // Refuse an oversized or corrupted INI before readStringUntil allocates RAM.
+  if(f.size()>8192){f.close();return false;}
   while(f.available()){
     String line=f.readStringUntil('\n');line.trim();
     if(!line.length()||line.startsWith("#"))continue;
@@ -412,7 +414,7 @@ void keyPress(){
       editBuf=strValue(settingKey(settingsIdx));lastDraw=0;
     }else if(check(SelPress) || (k.pressed && k.enter)){
       String prompt=String("MQTT ")+String(settingsIdx+1)+"/8: "+settingNames[settingsIdx];
-      String typed=keyboard(editBuf,110,prompt,false);
+      String typed=keyboard(editBuf,110,prompt,settingsIdx==1||settingsIdx==5);
       if(typed!=String("\x1B")){
         editBuf=typed;
         finishSetting();
