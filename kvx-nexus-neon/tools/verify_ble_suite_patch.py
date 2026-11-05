@@ -46,7 +46,9 @@ assert "const int rowHeight = 12;" in menu
 assert "const int firstRowY = 31;" in menu
 assert "tft.setTextSize(1);" in menu
 assert "int maxVisible = (tftHeight - 80) / 25" not in menu
-assert "delay(2000);" not in ble
+welcome = ble.split("void showWelcomeScreen()", 1)[1].split("void BleSuiteMenu()", 1)[0]
+assert "delay(2000);" not in welcome
+assert "delay(120);" in welcome
 assert "stopBLEStack(); // Deinit + release the UI RAM reservation." in scan_init
 assert menu.count("if (check(EscPress))") >= 1
 for label in expected_labels:
