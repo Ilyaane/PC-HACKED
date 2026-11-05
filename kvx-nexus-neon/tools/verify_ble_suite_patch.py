@@ -56,7 +56,9 @@ assert "stopBLEStack();" in ble_menu
 assert "BLEDevice::deinit();" not in ble_menu.split("void BleMenu::optionsMenu()", 1)[1].split("void BleMenu::drawIcon", 1)[0]
 clear = ble.split("void ScannerData::clear()", 1)[1].split("size_t ScannerData::size()", 1)[0]
 assert clear.count(".shrink_to_fit();") == 6, "Scanner arrays still retain allocated capacity"
-assert menu.count("if (check(EscPress))") >= 1
+assert "if (forceHome || returnToMenu || check(EscPress))" in menu
+assert 'RAM_LOG("ble-suite exit")' in menu
+assert '#include "root/app/ram_profile.h"' in ble
 for label in expected_labels:
     assert menu.count(f'"{label}"') == 1, f"Missing/duplicated BLE Suite menu entry: {label}"
 assert "executeAttackWithTargetScan(selected)" in menu
