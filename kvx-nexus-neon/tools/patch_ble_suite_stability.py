@@ -91,10 +91,14 @@ def patch(root: Path) -> None:
         "BLE Suite failed-init exit"
     )
 
+    # Match only the main BLE Suite grid, never other scan/diagnostic views.
+    menu_start = suite.index("void BleSuiteMenu()")
+    menu_end = suite.index("const char *getScanTitle(", menu_start)
+    menu = suite[menu_start:menu_end]
     # The original 25px row height shows only TWO items on a 135px display.
     # A compact 12px row with a 1x font shows six items while keeping footer.
-    suite = replace_once(
-        suite,
+    menu = replace_once(
+        menu,
         '    int maxVisible = (tftHeight - 80) / 25;',
         '    const int rowHeight = 12;\n'
         '    const int firstRowY = 31;\n'
@@ -102,8 +106,8 @@ def patch(root: Path) -> None:
         '    const int maxVisible = max(1, (footerTopY - firstRowY) / rowHeight);',
         "BLE Suite compact viewport"
     )
-    suite = replace_once(
-        suite,
+    menu = replace_once(
+        menu,
         '            tft.setTextSize(2);\n'
         '            tft.setCursor((tftWidth - tft.textWidth("BLE SUITE")) / 2, 15);\n'
         '            tft.print("BLE SUITE");\n'
@@ -114,35 +118,29 @@ def patch(root: Path) -> None:
         '            tft.setTextSize(1);',
         "BLE Suite title and list font"
     )
-    suite = replace_once(
-        suite,
+    menu = replace_once(
+        menu,
         '                int yPos = 60 + (i * 25);',
         '                int yPos = firstRowY + (i * rowHeight);',
         "BLE Suite row positioning"
     )
-    suite = replace_once(
-        suite,
+    menu = replace_once(
+        menu,
         'tft.fillRect(20, yPos, tftWidth - 40, 20, TFT_WHITE);',
         'tft.fillRect(13, yPos, tftWidth - 26, rowHeight - 1, TFT_WHITE);',
         "BLE Suite selected row background"
     )
-    suite = replace_once(
-        suite,
+    menu = replace_once(
+        menu,
         'tft.fillRect(20, yPos, tftWidth - 40, 20, kvxConfig.bgColor);',
         'tft.fillRect(13, yPos, tftWidth - 26, rowHeight - 1, kvxConfig.bgColor);',
         "BLE Suite non-selected row background"
     )
-    # Another BLE Suite screen uses the same cursor expression: only modify
-    # this twelve-item menu, not any diagnostic or scan UI.
-    menu_start = suite.index("void BleSuiteMenu()")
-    menu_end = suite.index("const char *getScanTitle(", menu_start)
-    block = suite[menu_start:menu_end]
     cursor_anchor = 'tft.setCursor(25, yPos + 5);'
-    assert block.count(cursor_anchor) == 2, "BLE Suite row cursor count changed"
-    block = block.replace(cursor_anchor, 'tft.setCursor(17, yPos + 2);')
-    suite = suite[:menu_start] + block + suite[menu_end:]
-    suite = replace_once(
-        suite,
+    assert menu.count(cursor_anchor) == 2, "BLE Suite row cursor count changed"
+    menu = menu.replace(cursor_anchor, 'tft.setCursor(17, yPos + 2);')
+    menu = replace_once(
+        menu,
         '                tft.print(String(idx + 1) + ". " + menuItems[idx]);',
         '                String label = String(idx + 1) + ". " + menuItems[idx];\n'
         '                const int maxChars = max(1, (tftWidth - 35) / 6);\n'
@@ -150,8 +148,8 @@ def patch(root: Path) -> None:
         '                tft.print(label);',
         "BLE Suite label clipping"
     )
-    suite = replace_once(
-        suite,
+    menu = replace_once(
+        menu,
         '                tft.setCursor(tftWidth - 25, 65);\n'
         '                if (scrollOffset > 0) tft.print("^");\n'
         '                tft.setCursor(tftWidth - 25, 65 + (maxVisible * 25) - 10);',
@@ -160,8 +158,8 @@ def patch(root: Path) -> None:
         '                tft.setCursor(tftWidth - 19, firstRowY + maxVisible * rowHeight - 9);',
         "BLE Suite scroll indicators"
     )
-    suite = replace_once(
-        suite,
+    menu = replace_once(
+        menu,
         '            tft.setCursor(20, tftHeight - 30);\n'
         '            tft.print("SEL: Select  PREV/NEXT: Navigate");\n'
         '            tft.setCursor(20, tftHeight - 20);\n'
@@ -172,6 +170,8 @@ def patch(root: Path) -> None:
         '            tft.print("ESC: retour KVX");',
         "BLE Suite compact footer"
     )
+
+    suite = suite[:menu_start] + menu + suite[menu_end:]
 
     # BLE scan initialization has to undo its RAM reservation when the
     # scan object cannot be obtained (without changing scanning behavior).
