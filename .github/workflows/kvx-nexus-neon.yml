@@ -1,4 +1,4 @@
-name: KVXputer Core BLE Suite + compact Nexus WiFi integration
+name: KVXputer Cardputer ADV source audit and rebuilt integrated firmware
 on:
   push:
     branches:
@@ -7,6 +7,7 @@ on:
       - kvx-nexus-v10-mqtt-v5-20261104
       - kvx-nexus-mqtt-fixes-fonts-20261105
       - kvx-core-ble-suite-nexus-wifi-20261105
+      - kvx-core-stabilisation-rebuild-20261105
     paths:
       - 'kvx-nexus-neon/**'
       - '.github/workflows/kvx-nexus-neon.yml'
@@ -57,6 +58,9 @@ jobs:
           python kvx-nexus-neon/tools/patch_ble_suite_stability.py kvxputer
           python kvx-nexus-neon/tools/patch_ble_stack_cleanup.py kvxputer
           python kvx-nexus-neon/tools/patch_ble_scanner_bounds.py kvxputer
+          python kvx-nexus-neon/tools/patch_wifi_session_leases.py kvxputer
+          python kvx-nexus-neon/tools/patch_ble_lifecycle_checks.py kvxputer
+          python kvx-nexus-neon/tools/patch_ble_snapshot_lifetime.py kvxputer
       - name: Verify patched core integration invariants
         run: python kvx-nexus-neon/tools/check_core_patches.py kvxputer
       - name: Install PlatformIO
