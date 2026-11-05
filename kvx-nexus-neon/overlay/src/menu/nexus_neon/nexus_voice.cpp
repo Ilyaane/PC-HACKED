@@ -122,13 +122,19 @@ bool convert48To16() {
 }
 bool networkReady() {
     return WiFi.status()==WL_CONNECTED &&
-           strlen(NEXUS_NEON_SHARED_TOKEN)>=10 &&
-           time(nullptr)>=1700000000 && storage();
+           strlen(NEXUS_NEON_SHARED_TOKEN)>=10 && storage();
 }
 void worker(void *arg) {
     Job *job=static_cast<Job*>(arg);
     bool ok=false;
     if(networkReady() && !aborting.load()) {
+        // Never skip NTP merely because the RTC-less Cardputer restarted.
+        if(time(nullptr)<1700000000) {
+            configTime(0,0,"pool.ntp.org","time.google.com");
+            for(int n=0;n<40 && time(nullptr)<1700000000 &&
+                !aborting.load();n++)vTaskDelay(pdMS_TO_TICKS(100));
+        }
+        if(time(nullptr)>=1700000000 && !aborting.load()) {
         WiFiClientSecure client;
         client.setCACert(NEXUS_TRUSTED_ROOTS);
         client.setTimeout(8000);
@@ -184,6 +190,7 @@ void worker(void *arg) {
                 }
             }
             http.end();
+        }
         }
     }
     transferOK=ok;

@@ -76,6 +76,8 @@ String sStatus = "Pret";
 bool sDirty = true;
 unsigned long sPollAt = 0;
 int sVoiceSelection = 0;
+uint32_t sRequestedVoiceId = 0;
+String sRequestedVoiceRecipient;
 
 bool isConfigured() {
     return String(NEXUS_NEON_SERVER_URL).startsWith("https://") &&
@@ -658,7 +660,11 @@ void handleKeys(bool &exitApp) {
                  !sItems[sSelected].mine && !NexusVoice::busy() && !sBusy) {
             const uint32_t id=sItems[sSelected].id;
             if (NexusVoice::playReceived(id)) sStatus=NexusVoice::status();
-            else if (NexusVoice::receive(id,ownRole(sRecipient))) sView=View::STATUS;
+            else if (NexusVoice::receive(id,ownRole(sRecipient))) {
+                sRequestedVoiceId=id;
+                sRequestedVoiceRecipient=sRecipient;
+                sView=View::STATUS;
+            }
             else sStatus=NexusVoice::status();
         }
         else if (sView == View::VOICE) voiceAction();
@@ -708,11 +714,14 @@ void nexusNeonApp() {
         if (NexusVoice::poll()) {
             const bool downloaded=NexusVoice::completedDownload();
             sStatus=NexusVoice::status();
-            if (downloaded) {
+            if (downloaded && sRequestedVoiceId==NexusVoice::lastDownloadId() &&
+                sRequestedVoiceRecipient==sRecipient && sView==View::STATUS) {
                 NexusVoice::playReceived(NexusVoice::lastDownloadId());
                 sStatus=NexusVoice::status();
                 sView=View::DETAIL;
             } else if (sView==View::STATUS) sView=View::VOICE;
+            sRequestedVoiceId=0;
+            sRequestedVoiceRecipient="";
             sDirty=true;
         }
         if (sView == View::MESSAGES && !sBusy && !NexusVoice::busy() &&
