@@ -14,7 +14,8 @@ Date de l'audit : 5 novembre 2026.
 4. **Initialisation BLE considérée réussie sans preuve** : `BLEStateManager::initBLE` ignorait le booléen de `NimBLEDevice::init` et pouvait réutiliser un indicateur d'initialisation périmé. Correction : vérifier le booléen et l'état réel, désactiver proprement l'application si l'initialisation échoue.
 5. **Utilisation de pointeurs vers un instantané BLE supprimé** : `ScannerData::getSnapshot` renvoyait un pointeur nu alors que `addDevice` et `clear` pouvaient libérer le cache. Correction : références propriétaires `std::shared_ptr` et accès au cache protégés par mutex.
 6. **MQTT et Wi-Fi partagé** : la version fusionnée ne propose pas la connexion au réseau depuis sa page « Réseau ». Correction : ENTREE invoque le menu Wi-Fi natif KVX, avec retour dans MQTT; ESC revient au menu MQTT.
-7. **Polices disproportionnées** : écrans de connexion Wi-Fi et menus KVX affichés plus grands que le menu BLE 1×. Correctifs précédents maintenus.
+7. **Horloge non mémorisée immédiatement** : sur carte sans RTC sauvegardée, la tâche de persistance attendait sa première minute avant d'écrire en NVS. L'utilisateur pouvait redémarrer avant ce premier enregistrement. Correction : écriture immédiate après réglage manuel ou synchronisation NTP, en conservant la tâche périodique. Après extinction, une heure enregistrée n'est qu'approximative et doit être resynchronisée.
+8. **Polices disproportionnées** : écrans de connexion Wi-Fi et menus KVX affichés plus grands que le menu BLE 1×. Correctifs précédents maintenus.
 
 ## Limites de l'audit
 - Le firmware complet comporte de nombreuses applications : cet audit cible les ressources communes, menus, connexion réseau, configuration MQTT et détection BLE passive. Il n'établit pas que tous les bugs du dépôt ont été trouvés.
