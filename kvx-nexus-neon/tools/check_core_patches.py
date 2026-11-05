@@ -46,6 +46,11 @@ require('std::shared_ptr<DeviceSnapshot> ScannerData::getSnapshot()' in ble,"BLE
 require('auto snapshot = scannerData.getSnapshot();' in ble,"BLE snapshot callers own references")
 require('std::shared_ptr<DeviceSnapshot> snapshotCache;' in content("src/menu/ble/BLE_Suite.h"),"BLE cache has owned lifetime")
 require('bool connected=wifiConnectMenu();' in mqtt,"MQTT user can reconnect KVX WiFi")
+require('void persistClockNow();' in content("src/root/app/utils.h"),"Clock immediate save exported")
+require('void persistClockNow()' in content("src/root/app/utils.cpp"),"Clock immediate NVS save")
+require('persistClockNow(); // Save manually adjusted time' in content("src/root/ui/settings.cpp"),"Manual clock write")
+require('persistClockNow(); // NTP time should survive' in content("src/root/app/utils.cpp"),"NTP clock write")
+
 
 
 # This quality gate verifies structure, not the physical radio or network.
