@@ -2,6 +2,7 @@
 // Text-only first milestone. No LoRa radio, no audio, no external credentials built in.
 #include "root/ui/display.h"
 #include "root/input/mykeyboard.h"
+#include "root/storage/sd_functions.h"
 #include "root/app/utils.h"
 #include <globals.h>
 #include "kvx_mqtt_private.h"
@@ -121,14 +122,22 @@ bool loadConfig(){
   f.close();return configIsValid();
 }
 bool saveConfig(){
-  if(!configIsValid())return false;
+  if(!sdOK || !configIsValid())return false;
   SD.remove("/mqtt/config.tmp");
   File f=SD.open("/mqtt/config.tmp",FILE_WRITE);
   if(!f)return false;
+  bool written=true;
   for(uint8_t i=0;i<SETTINGS_COUNT;i++){
-    f.print(settingKey(i));f.print('=');f.println(strValue(settingKey(i)));
+    const String line=String(settingKey(i))+"="+strValue(settingKey(i))+"\n";
+    written = (f.print(line) == line.length()) && written;
   }
+  f.flush();
   f.close();
+  if(!written){SD.remove("/mqtt/config.tmp");return false;}
+  File verify=SD.open("/mqtt/config.tmp",FILE_READ);
+  const bool good=verify && verify.size()>=40;
+  if(verify)verify.close();
+  if(!good){SD.remove("/mqtt/config.tmp");return false;}
   SD.remove("/mqtt/config.bak");
   if(SD.exists(CONFIG_FILE) && !SD.rename(CONFIG_FILE,"/mqtt/config.bak"))return false;
   if(!SD.rename("/mqtt/config.tmp",CONFIG_FILE)){
@@ -280,8 +289,12 @@ void finishSetting(){
       inSettings=false;currentPage=Page::Network;
       setStatus("Configuration sauvee; reconnexion...");
     } else {
-      setStatus("CONFIG INVALIDE: verifier champs");
-      settingsIdx=0;editBuf=strValue(settingKey(0));
+      // Don't send the user back to field 1 or erase what was typed.
+      if(!sdOK) setStatus("microSD non montee : configuration non sauvee");
+      else if(!configIsValid()) setStatus("MQTT: hote, compte ou a/b invalide");
+      else setStatus("Ecriture /mqtt/config.ini echouee");
+      // Stay at the last field: UP/DOWN navigates to the one to fix.
+      currentPage=Page::Settings;
     }
   }
   lastDraw=0;
@@ -320,10 +333,8 @@ void onKey(uint8_t code,char typed,bool fn,bool shift){
   bool changed=false;
   if(currentPage==Page::Settings){
     if(back){inSettings=false;currentPage=Page::Home;changed=true;}
-    else if(tab){revealPassword=!revealPassword;changed=true;}
-    else if(enter){finishSetting();changed=true;}
-    else if(del && editBuf.length()){editBuf.remove(editBuf.length()-1);changed=true;}
-    else if(!fn && typed>=32 && typed<=126 && editBuf.length()<100){editBuf+=typed;changed=true;}
+    // Raw ported keyboard characters must not be inserted into configuration.
+    // Use KVXputer's native editor from keyPress() instead.
   }else if(currentPage==Page::Home){
     if(directArrow){
       if(code==',' && selectedTile%2==1)selectedTile--;
@@ -370,8 +381,31 @@ void keyPress(){
   if ((esc && isFnKeyHeld()) || (k.pressed && k.fn && k.exit_key)) {
     EscPress=false; returnToMenu=true; return;
   }
-  if(esc || (k.pressed && k.exit_key)) onKey(96, char(96), false, false);
+  if(esc || (k.pressed && k.exit_key)) { onKey(96, char(96), false, false); return; }
   bool up=check(UpPress), down=check(DownPress), left=check(PrevPress), right=check(NextPress);
+  if(currentPage==Page::Settings) {
+    // The standalone M5Cardputer inline editor cannot be driven reliably by
+    // KVXputer's KeyStroke + global shortcut flags. Never append k.word here.
+    if(up || left){
+      if(settingsIdx>0) --settingsIdx;
+      editBuf=strValue(settingKey(settingsIdx));lastDraw=0;
+    }else if(down || right){
+      if(settingsIdx+1<SETTINGS_COUNT) ++settingsIdx;
+      editBuf=strValue(settingKey(settingsIdx));lastDraw=0;
+    }else if(check(SelPress) || (k.pressed && k.enter)){
+      String prompt=String("MQTT ")+String(settingsIdx+1)+"/8: "+settingNames[settingsIdx];
+      String typed=keyboard(editBuf,110,prompt,false);
+      if(typed!=String("\x1B")){
+        editBuf=typed;
+        finishSetting();
+      }else{
+        setStatus("Modification annulee : ancienne valeur conservee");
+      }
+      lastDraw=0;
+    }
+    // Do not interpret any second character event for the same physical key.
+    return;
+  }
   if (up) onKey(';',';',false,false);
   if (down) onKey('.','.',false,false);
   if (left) onKey(',',',',false,false);
@@ -720,7 +754,9 @@ void appStart(){
   currentPage=Page::Home;selectedTile=0;selectedHistory=0;scrollPos=0;
   recent.clear();draft="";txWaiting=false;statusText="Initialisation...";
   uiInitialized=false;lastDraw=0;lastPhysicalKeyMask=0;
-  sdOK=sdcardMounted;
+  // KVX mounts microSD lazily; without this call config.ini and ca.pem
+  // silently fail even when the card is inserted.
+  sdOK=setupSdCard() && sdcardMounted;
   if(sdOK){
     SD.mkdir("/mqtt");
     if(!SD.exists(CONFIG_FILE) && SD.exists("/mqtt/config.bak"))
@@ -732,7 +768,7 @@ void appStart(){
   }
   configured=loadConfig();caPem=readCA();
   stopWorker.store(false);workerFinished.store(true);
-  if(!sdOK)setStatus("Carte microSD necessaire aux messages");
+  if(!sdOK)setStatus("MicroSD absente ou impossible a monter");
   else if(!configured){startSettings();setStatus("Configurer MQTT (TAB/F1)");}
   else if(caPem.isEmpty())setStatus("Installer /mqtt/ca.pem (TLS)");
   else{
