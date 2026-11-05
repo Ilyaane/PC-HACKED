@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Static integration contract checks against patched disposable KVX checkout."""
+from pathlib import Path
+import sys
+
+root=Path(sys.argv[1]).resolve()
+def content(p): return (root/p).read_text(encoding="utf-8")
+
+ble=content("src/menu/ble/BLE_Suite.cpp")
+generic=content("src/menu/ble/ble_common.cpp")
+wifi=content("src/root/net/wifi_common.cpp")
+ui=content("src/root/ui/kvx_ui.cpp")
+display=content("src/root/ui/display.cpp")
+nexus=content("src/menu/nexus_neon/nexus_neon_app.cpp")
+mqtt=content("src/menu/kvx_mqtt/kvx_mqtt_app.cpp")
+
+def require(condition,message):
+    assert condition,message
+
+require('if (!BLEStateManager::initBLE("Kvx-BLESuite", ESP_PWR_LVL_P9))' in ble,"BLE Suite init guard")
+require("uiRamLeaveHeavy(); // Restore regular KVX UI" in ble,"BLE Suite release")
+require("const int rowH = 13;" in ble,"BLE Suite compact rows")
+require("const int menuTop = 32;" in ble,"BLE Suite compact top")
+require("deviceAddresses.size() >= 64" in ble,"BLE scanner bounded")
+require(ble.count("size_t deviceCount = snapshot->count;") >= 2,"BLE selection size matches snapshot")
+require("std::vector<String>().swap(deviceNames)" in ble,"BLE clear returns capacity")
+require("BLEStateManager::isBLEActive()" in generic,"generic stop BLE ownership")
+require("BLEDevice::deinit();" in generic,"generic stack cleanup")
+require("wifiCompactNotice(" in wifi,"Wi-Fi status compact")
+require("static int wifiScanWithCancel()" in wifi,"Wi-Fi asynchronous scan")
+require("WiFi.scanNetworks(true)" in wifi,"Wi-Fi nonblocking scan start")
+require("vTaskDelay(pdMS_TO_TICKS(30))" in wifi,"Wi-Fi scan yields")
+require("if (nets == -3)" in wifi,"Wi-Fi scan Esc cancellation")
+require('tft.setTextSize(kKvxMenuFont)' in ui,"shared KVX compact 1x")
+require("uiRowH(1)" in display,"regular option density")
+require("heap_caps_get_largest_free_block" in nexus,"Nexus contiguous heap guard")
+require("sdOK=setupSdCard() && sdcardMounted;" in mqtt,"MQTT lazy SD init")
+require('String typed=keyboard(editBuf,110,prompt,false);' in mqtt,"MQTT native editor")
+
+# This quality gate verifies structure, not the physical radio or network.
+print("PASS: BLE scan lifecycle, memory bounds, compact menus, Wi-Fi cancel, MQTT/Nexus integration")
+print("NOTE: no physical RF, TLS or Wi-Fi association tested here")
