@@ -15,6 +15,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cstring>
+#include <new>
 #include <time.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -262,14 +263,12 @@ bool send(const String &recipient){
     if(idKey.isEmpty() || !remember()){state="ID de reprise non sauvegarde";return false;}
     return begin(Work::Send,recipient,idKey,0);
 }
-bool receive(uint32_t id){
+bool receive(uint32_t id,const String &ownRole){
     if(busy() || !id)return false;
     if(!storage())return false;
     if(valid(receivedPath(id))){state="Vocal deja telecharge";return true;}
-    const String saved=draftRecipient();(void)saved;
-    // A GET identifies the current user's role through the sender header.
-    // Recipient role is established at call site via set in the URL auth below.
-    return begin(Work::Receive,peer=="alice"?"bob":"alice","",id);
+    if(ownRole!="alice" && ownRole!="bob")return false;
+    return begin(Work::Receive,ownRole,"",id);
 }
 bool playReceived(uint32_t id){
     if(busy() || !storage() || !valid(receivedPath(id))){state="WAV recu invalide";return false;}

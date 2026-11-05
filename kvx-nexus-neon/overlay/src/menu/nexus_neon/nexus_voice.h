@@ -11,7 +11,7 @@ bool record(const String &recipient);
 bool playDraft();
 bool removeDraft();
 bool send(const String &recipient);
-bool receive(uint32_t id);
+bool receive(uint32_t id,const String &ownRole);
 bool playReceived(uint32_t id);
 bool busy();
 bool poll(); // true when an asynchronous transfer completed
