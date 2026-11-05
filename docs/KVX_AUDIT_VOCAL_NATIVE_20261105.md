@@ -32,3 +32,17 @@ Date : 5 novembre 2026. Branche : `kvx-core-stabilisation-rebuild-20261105`.
 ## Suivi GitHub
 - Issue de validation : https://github.com/Ilyaane/PC-HACKED/issues/8
 - Workflow : https://github.com/Ilyaane/PC-HACKED/actions/workflows/kvx-nexus-neon.yml
+
+## Résultat CI final de la révision de code
+- Commit code : `994cfbadbb97633da8586ca16c070c76d496f35a`.
+- GitHub Actions : https://github.com/Ilyaane/PC-HACKED/actions/runs/42076197664
+- Tests statiques : réussis.
+- Compilation PlatformIO `m5stack-cardputer` (profil KVX configuré ADV/ES8311) : réussie.
+- Contrôle image d'application ESP32 : en-tête et partition vérifiés.
+- Taille de l'image applicative : **5 316 064 octets** ; partition : **6 160 384 octets** ; marge : **844 320 octets**.
+- RAM statique rapportée : **161 472 / 327 680 octets (49,3 %)**.
+- SHA-256 du fichier image d'application : `4fe37fd498c64d4eef8b886aa2365508f0eb6ebeb77eb07b07ba553019eef0fa`.
+- Artefact CI chiffré : `KVXputer-NexusV10-MQTTV5-Encrypted` ; le fichier `.bin.enc` ne se flashe pas directement.
+- Avertissements tierces-parties persistants : M5GFX/One Definition Rule et ESP8266Audio/optimisation de tableaux. Leur absence d'effet sur l'exécution réelle n'est pas certifiée.
+- Connexion réelle Wi-Fi, serveur Nexus, broker MQTT, capture/lecture micro, tests radio passifs et stress matériel : **non testés**.
+- Ne pas confondre réussite CI et absence de bugs sur le vrai appareil.
