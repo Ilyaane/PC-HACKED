@@ -92,6 +92,7 @@ bool convert48To16() {
     h[20]=1;h[22]=1;
     write32(h+24,16000);write32(h+28,32000);h[32]=2;h[34]=16;
     bool ok=output.write(h,44)==44;
+    bool nonzero=false;
     uint32_t outputBytes=0;
     // 768 samples per read, 256 output samples: ~3 seconds require ~2 KB RAM.
     alignas(4) int16_t from[768],to[256];
@@ -103,6 +104,7 @@ bool convert48To16() {
         for(size_t i=0;i<samples;i++){
             const int32_t n=int32_t(from[3*i])+from[3*i+1]+from[3*i+2];
             to[i]=int16_t(n/3);
+            if(to[i]!=0)nonzero=true;
         }
         const size_t nbytes=samples*2;
         if(outputBytes+nbytes>MAX_WAV-44 ||
@@ -110,7 +112,7 @@ bool convert48To16() {
         outputBytes+=(uint32_t)nbytes;
         vTaskDelay(pdMS_TO_TICKS(1));
     }
-    if(outputBytes<1600)ok=false;
+    if(outputBytes<1600 || !nonzero)ok=false;
     if(ok){
         write32(h+4,outputBytes+36);write32(h+40,outputBytes);
         ok=output.seek(0) && output.write(h,44)==44;

@@ -728,7 +728,8 @@ void nexusNeonApp() {
                 NexusVoice::playReceived(NexusVoice::lastDownloadId());
                 sStatus=NexusVoice::status();
                 sView=View::DETAIL;
-            } else if (sView==View::STATUS) sView=View::VOICE;
+            } else if (sView==View::STATUS)
+                sView=sRequestedVoiceId?View::DETAIL:View::VOICE;
             sRequestedVoiceId=0;
             sRequestedVoiceRecipient="";
             sDirty=true;
