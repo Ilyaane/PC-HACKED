@@ -33,10 +33,14 @@ change("""            if (snapshotCache) {
                 delete snapshotCache;
                 snapshotCache = nullptr;
             }""", """            snapshotCache.reset();""",1)
-change("""        if (snapshotCache) {
+change("""        dataVersion++;
+
+        if (snapshotCache) {
             delete snapshotCache;
             snapshotCache = nullptr;
-        }""", """        snapshotCache.reset();""",1)
+        }""", """        dataVersion++;
+
+        snapshotCache.reset();""",1)
 start=s.index("DeviceSnapshot *ScannerData::getSnapshot() {")
 end=s.index("bool ScannerData::getDeviceInfo(",start)
 replacement="""std::shared_ptr<DeviceSnapshot> ScannerData::getSnapshot() {
