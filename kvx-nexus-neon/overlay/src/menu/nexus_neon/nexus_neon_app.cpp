@@ -562,6 +562,23 @@ void sendDraft() {
     if (beginOperation(Op::SEND, body)) sView = View::STATUS;
 }
 
+void voiceAction() {
+    if (sBusy) {sStatus="Attendre la fin du HTTPS";sDirty=true;return;}
+    if (sVoiceSelection==0) {
+        sStatus="Enregistrement vocal (3 secondes)";
+        sDirty=true;
+        paint();
+        NexusVoice::record(sRecipient);
+    } else if (sVoiceSelection==1) {
+        NexusVoice::playDraft();
+    } else if (sVoiceSelection==2) {
+        if (NexusVoice::send(sRecipient)) sView=View::STATUS;
+    } else if (sVoiceSelection==3) {
+        NexusVoice::removeDraft();
+    }
+    sStatus=NexusVoice::status();
+    sDirty=true;
+}
 bool pressed(volatile bool &flag) { return check(flag); }
 
 void handleHomeSelect() {
@@ -578,10 +595,13 @@ void handleHomeSelect() {
             wifiConnectMenu();
             sStatus = WiFi.status() == WL_CONNECTED ? "Wi-Fi connecte" : "Wi-Fi non connecte";
         }
+    } else if (sHome==3) {
+        sView=View::CONTACT;
     } else {
-        sView = View::CONTACT;
+        if (NexusVoice::storage()) {sVoiceSelection=0;sView=View::VOICE;}
+        else sStatus="Inserer une microSD pour les vocaux";
     }
-    sDirty = true;
+    sDirty=true;
 }
 
 void handleKeys(bool &exitApp) {
@@ -606,24 +626,26 @@ void handleKeys(bool &exitApp) {
         return;
     }
     if (pressed(UpPress)) {
-        if (sView == View::HOME) sHome = (sHome + 3) % 4;
+        if (sView == View::HOME) sHome = (sHome + 4) % 5;
         else if (sView == View::MESSAGES && sCount) sSelected = max(0, sSelected - 1);
+        else if (sView == View::VOICE) sVoiceSelection=(sVoiceSelection+3)%4;
         sDirty = true;
     }
     if (pressed(DownPress)) {
-        if (sView == View::HOME) sHome = (sHome + 1) % 4;
+        if (sView == View::HOME) sHome = (sHome + 1) % 5;
         else if (sView == View::MESSAGES && sCount) sSelected = min(sCount - 1, sSelected + 1);
+        else if (sView == View::VOICE) sVoiceSelection=(sVoiceSelection+1)%4;
         sDirty = true;
     }
     if (pressed(PrevPress)) {
-        if (sView == View::HOME) sHome = (sHome + 3) % 4;
+        if (sView == View::HOME) sHome = (sHome + 4) % 5;
         else if (sView == View::MESSAGES && !sBusy) beginOperation(Op::FETCH);
         else if (sView == View::CONTACT) sRecipient = sRecipient == "bob" ? "alice" : "bob";
         else if (sView == View::DETAIL && sCount) sSelected = max(0, sSelected - 1);
         sDirty = true;
     }
     if (pressed(NextPress)) {
-        if (sView == View::HOME) sHome = (sHome + 1) % 4;
+        if (sView == View::HOME) sHome = (sHome + 1) % 5;
         else if (sView == View::MESSAGES && !sBusy) newDraft();
         else if (sView == View::CONTACT) sRecipient = sRecipient == "bob" ? "alice" : "bob";
         else if (sView == View::DETAIL && sCount) sSelected = min(sCount - 1, sSelected + 1);
@@ -632,6 +654,14 @@ void handleKeys(bool &exitApp) {
     if (pressed(SelPress)) {
         if (sView == View::HOME) handleHomeSelect();
         else if (sView == View::MESSAGES && sCount) sView = View::DETAIL;
+        else if (sView == View::DETAIL && sCount && sItems[sSelected].voice &&
+                 !sItems[sSelected].mine && !NexusVoice::busy() && !sBusy) {
+            const uint32_t id=sItems[sSelected].id;
+            if (NexusVoice::playReceived(id)) sStatus=NexusVoice::status();
+            else if (NexusVoice::receive(id,ownRole(sRecipient))) sView=View::STATUS;
+            else sStatus=NexusVoice::status();
+        }
+        else if (sView == View::VOICE) voiceAction();
         else if (sView == View::CONFIRM) sendDraft();
         else if (sView == View::CONTACT) {
             if (sActiveRecipient != sRecipient) {
@@ -668,13 +698,24 @@ void nexusNeonApp() {
     sDirty = true;
     sPollAt = millis() + kPollMs;
     // Do not reset sBusy: a previously launched HTTPS request may still be running.
+    (void)NexusVoice::storage();
     EscPress = false; SelPress = false; NextPress = false; PrevPress = false;
     UpPress = false; DownPress = false;
     bool exitApp = false;
     while (!exitApp && !returnToMenu && !forceHome) {
         checkReboot();
         acceptReply();
-        if (sView == View::MESSAGES && !sBusy &&
+        if (NexusVoice::poll()) {
+            const bool downloaded=NexusVoice::completedDownload();
+            sStatus=NexusVoice::status();
+            if (downloaded) {
+                NexusVoice::playReceived(NexusVoice::lastDownloadId());
+                sStatus=NexusVoice::status();
+                sView=View::DETAIL;
+            } else if (sView==View::STATUS) sView=View::VOICE;
+            sDirty=true;
+        }
+        if (sView == View::MESSAGES && !sBusy && !NexusVoice::busy() &&
             WiFi.status() == WL_CONNECTED && (int32_t)(millis() - sPollAt) >= 0) {
             beginOperation(Op::FETCH);
             sPollAt = millis() + kPollMs;
@@ -683,6 +724,8 @@ void nexusNeonApp() {
         handleKeys(exitApp);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
+    // Best-effort abort for a voice download on leaving the module.
+    NexusVoice::cancel();
     // Let in-flight HTTPS finish; replies are consumed/dropped by generation on re-entry.
     tft.fillScreen(kvxConfig.bgColor);
 #endif
