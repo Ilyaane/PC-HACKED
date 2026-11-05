@@ -7,6 +7,7 @@ import sys
 root = Path(sys.argv[1]).resolve()
 ble = (root / "src/menu/ble/BLE_Suite.cpp").read_text(encoding="utf-8")
 common = (root / "src/menu/ble/ble_common.cpp").read_text(encoding="utf-8")
+ble_menu = (root / "src/menu/ble/ble_menu.cpp").read_text(encoding="utf-8")
 
 init = ble.split("bool BLEStateManager::initBLE(", 1)[1].split(
     "void BLEStateManager::deinitBLE(", 1
@@ -50,6 +51,11 @@ welcome = ble.split("void showWelcomeScreen()", 1)[1].split("void BleSuiteMenu()
 assert "delay(2000);" not in welcome
 assert "delay(120);" in welcome
 assert "stopBLEStack(); // Deinit + release the UI RAM reservation." in scan_init
+assert "if (is_ble_inited || BLEConnected)" in common
+assert "stopBLEStack();" in ble_menu
+assert "BLEDevice::deinit();" not in ble_menu.split("void BleMenu::optionsMenu()", 1)[1].split("void BleMenu::drawIcon", 1)[0]
+clear = ble.split("void ScannerData::clear()", 1)[1].split("size_t ScannerData::size()", 1)[0]
+assert clear.count(".shrink_to_fit();") == 6, "Scanner arrays still retain allocated capacity"
 assert menu.count("if (check(EscPress))") >= 1
 for label in expected_labels:
     assert menu.count(f'"{label}"') == 1, f"Missing/duplicated BLE Suite menu entry: {label}"
