@@ -1,48 +1,64 @@
 #!/usr/bin/env python3
-"""Patch KVXputer source in a disposable checkout, never upstream."""
+"""Compact KVXputer's shared option menus to the same 1x text as BLE.
+
+Only changes shared menu-list renderers, file lists and regular option dialogs.
+Custom screens and icon artwork are left alone, to avoid clipped diagrams.
+Operate on a disposable pinned upstream checkout, not the user's originals.
+"""
 from pathlib import Path
-import sys
 import re
+import sys
+
 root = Path(sys.argv[1]).resolve()
-ui = root / "src/root/ui/kvx_ui.cpp"
-display = root / "src/root/ui/display.cpp"
-p = ui.read_text(encoding="utf-8")
-anchor = "static void drawKvxSubmenuRow("
-assert p.count(anchor) == 1
-if "sKvxSubmenuFontSize" not in p:
-    p = p.replace(anchor, "static int sKvxSubmenuFontSize = FM;\n\n" + anchor, 1)
-    before = """    tft.setTextSize(FM);
-    if (!options[i].enabled)"""
-    assert p.count(before)==1
-    p=p.replace(before, """    tft.setTextSize(sKvxSubmenuFontSize);
-    if (!options[i].enabled)""",1)
-    old = """    const int lineH = FM * LH + 4;
+ui_path = root / "src/root/ui/kvx_ui.cpp"
+display_path = root / "src/root/ui/display.cpp"
+
+ui = ui_path.read_text(encoding="utf-8")
+needle = "static void drawKvxSubmenuRow("
+assert ui.count(needle) == 1, "Unexpected KVX submenu drawing code"
+ui = ui.replace(needle, "static constexpr int kKvxMenuFont = 1;\\n\\n" + needle, 1)
+old = "    tft.setTextSize(FM);\\n    if (!options[i].enabled)"
+assert ui.count(old) == 1, "Expected row text-size anchor missing"
+ui = ui.replace(old, "    tft.setTextSize(kKvxMenuFont);\\n    if (!options[i].enabled)", 1)
+old = """    const int lineH = FM * LH + 4;
     const int startY = KVX_TOPBAR_H + 4;
     const int visible = max(1, (tftHeight - startY - 6) / lineH);
     int scroll = 0;
     if (index >= visible) scroll = index - visible + 1;
     int nchars = max(1, (tftWidth - 12) / (FM * LW));"""
-    assert p.count(old)==1
-    new = """    // Bluetooth menus need smaller text on the Cardputer's 240x135 screen.
-    // Keep unrelated KVXputer menus at their original font size.
-    const String requestedTitle = title ? String(title) : String();
-    sKvxSubmenuFontSize =
-        (requestedTitle == "Bluetooth" || requestedTitle.startsWith("BLE ")) ? 1 : FM;
-    const int lineH = sKvxSubmenuFontSize * LH + 4;
+new = """    // Same dense 1x font already approved in the Bluetooth submenu.
+    const int lineH = kKvxMenuFont * LH + 4;
     const int startY = KVX_TOPBAR_H + 4;
     const int visible = max(1, (tftHeight - startY - 6) / lineH);
     int scroll = 0;
     if (index >= visible) scroll = index - visible + 1;
-    int nchars = max(1, (tftWidth - 12) / (sKvxSubmenuFontSize * LW));"""
-    p=p.replace(old,new,1)
-    ui.write_text(p,encoding="utf-8")
+    int nchars = max(1, (tftWidth - 12) / (kKvxMenuFont * LW));"""
+assert ui.count(old) == 1, "Unexpected KVX submenu layout"
+ui = ui.replace(old, new, 1)
+ui_path.write_text(ui, encoding="utf-8")
 
-p=display.read_text(encoding="utf-8")
-old = "            const int nchars = max(1, (tftWidth - 12) / (FM * LW));"
-assert p.count(old) == 1
-new = """            const int bleFont = (kvxActiveTitle == "Bluetooth" ||
-                                 kvxActiveTitle.startsWith("BLE ")) ? 1 : FM;
-            const int nchars = max(1, (tftWidth - 12) / (bleFont * LW));"""
-p=p.replace(old,new,1)
-display.write_text(p,encoding="utf-8")
-print("BLE submenu font set to compact 1x; all non-BLE UI remains unchanged.")
+display = display_path.read_text(encoding="utf-8")
+# The regular option dialog and the file list are also navigation menus;
+# leave title-bars, text editors, and custom application canvases untouched.
+old = "#define MAX_MENU_SIZE max(1, (int)(tftHeight / uiRowH(FM)))"
+assert display.count(old) == 1, "Regular options capacity anchor missing"
+display = display.replace(old,
+    "#define MAX_MENU_SIZE max(1, (int)(tftHeight / uiRowH(1)))", 1)
+old = "const int nchars = max(1, (tftWidth - 12) / (FM * LW));"
+assert display.count(old) == 2, "Marquee and files must agree on the font size"
+display = display.replace(old,
+    "const int nchars = max(1, (tftWidth - 12) / (1 * LW));")
+beg = display.index("Opt_Coord drawOptions(")
+end = display.index("void drawSubmenu(", beg)
+segment = display[beg:end]
+assert "tft.setTextSize(FM)" in segment
+segment = re.sub(r"\\bFM\\b", "1", segment)
+display = display[:beg] + segment + display[end:]
+beg = display.index("Opt_Coord listFiles(")
+end = display.index("void drawSdSmall(", beg)
+segment = display[beg:end]
+assert "tft.setTextSize(FM)" in segment
+segment = re.sub(r"\\bFM\\b", "1", segment)
+display = display[:beg] + segment + display[end:]
+display_path.write_text(display, encoding="utf-8")
+print("KVX shared submenus, file lists and regular option dialogs: compact 1x font; custom screens unchanged.")
