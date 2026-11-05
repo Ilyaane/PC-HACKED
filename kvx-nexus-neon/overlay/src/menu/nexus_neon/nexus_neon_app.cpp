@@ -17,6 +17,9 @@
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
+#include <atomic>
+#include <new>
 #include <time.h>
 
 namespace {
@@ -39,12 +42,14 @@ struct Message {
     String body;
     bool mine = false;
 };
+struct NetReply;
 struct NetRequest {
     uint32_t generation = 0;
     Op op = Op::FETCH;
     String recipient;
     String payload;
     uint32_t after = 0;
+    NetReply *response = nullptr; // Preallocated on UI core; worker cannot deadlock on OOM.
 };
 struct NetReply {
     uint32_t generation = 0;
@@ -54,7 +59,7 @@ struct NetReply {
 };
 
 QueueHandle_t sReplyQueue = nullptr;
-bool sBusy = false;
+std::atomic<bool> sBusy{false};
 uint32_t sGeneration = 0;
 Message sItems[kMaxMessages];
 int sCount = 0, sSelected = 0;
@@ -106,8 +111,9 @@ String cut(const String &in, int maxChars) {
 
 void doHttp(void *raw) {
     NetRequest *req = static_cast<NetRequest *>(raw);
-    NetReply *rep = new (std::nothrow) NetReply();
-    if (!rep) { delete req; vTaskDelete(nullptr); return; }
+    NetReply *rep = req->response;
+    // Reply is reserved before the task launches, avoiding a permanent
+    // "busy" state when the network core has no heap left to allocate it.
     rep->generation = req->generation;
     rep->op = req->op;
     if (WiFi.status() != WL_CONNECTED) {
@@ -161,7 +167,10 @@ void doHttp(void *raw) {
         }
     }
     delete req;
-    if (!sReplyQueue || xQueueSend(sReplyQueue, &rep, 0) != pdTRUE) delete rep;
+    if (!sReplyQueue || xQueueSend(sReplyQueue, &rep, pdMS_TO_TICKS(20)) != pdTRUE) {
+        delete rep;
+        sBusy.store(false); // Never strand the module waiting for a missing reply.
+    }
     vTaskDelete(nullptr);
 }
 
@@ -171,13 +180,28 @@ bool beginOperation(Op op, const String &payload = "") {
         sReplyQueue = xQueueCreate(3, sizeof(NetReply *));
         if (!sReplyQueue) { sStatus = "Memoire insuffisante (file)"; return false; }
     }
-    if (ESP.getFreeHeap() < 43000) {
-        sStatus = "RAM insuffisante, action refusee";
-        sDirty = true;
+    // A 43 KB total-free-heap threshold rejected perfectly usable KVX builds.
+    // What matters for the worker is a large contiguous INTERNAL block.
+    // Reserve the reply first, so a failed allocation never leaves sBusy stuck.
+    const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (largest < (size_t)kWorkerStack + 2048U) {
+        if (op != Op::FETCH) {
+            sStatus = "RAM contigue faible (" + String(largest / 1024U) + " Ko)";
+            sDirty = true;
+        }
         return false;
     }
     NetRequest *req = new (std::nothrow) NetRequest();
-    if (!req) { sStatus = "Memoire indisponible"; sDirty = true; return false; }
+    if (!req) {
+        if (op != Op::FETCH) { sStatus = "Memoire de requete indisponible"; sDirty = true; }
+        return false;
+    }
+    req->response = new (std::nothrow) NetReply();
+    if (!req->response) {
+        delete req;
+        if (op != Op::FETCH) { sStatus = "Memoire de reponse indisponible"; sDirty = true; }
+        return false;
+    }
     req->generation = sGeneration;
     req->op = op;
     req->recipient = sRecipient;
@@ -186,9 +210,10 @@ bool beginOperation(Op op, const String &payload = "") {
     sBusy = true;
     if (xTaskCreatePinnedToCore(doHttp, "nexus_kvx_tls", kWorkerStack,
                                 req, 1, nullptr, 0) != pdPASS) {
+        delete req->response;
         delete req;
         sBusy = false;
-        sStatus = "Impossible de lancer le reseau";
+        sStatus = "Impossible de lancer TLS (" + String(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024U) + " Ko bloc libre)";
         sDirty = true;
         return false;
     }
