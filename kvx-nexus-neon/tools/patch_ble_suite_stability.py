@@ -132,9 +132,15 @@ def patch(root: Path) -> None:
         'tft.fillRect(13, yPos, tftWidth - 26, rowHeight - 1, kvxConfig.bgColor);',
         "BLE Suite non-selected row background"
     )
+    # Another BLE Suite screen uses the same cursor expression: only modify
+    # this twelve-item menu, not any diagnostic or scan UI.
+    menu_start = suite.index("void BleSuiteMenu()")
+    menu_end = suite.index("const char *getScanTitle(", menu_start)
+    block = suite[menu_start:menu_end]
     cursor_anchor = 'tft.setCursor(25, yPos + 5);'
-    assert suite.count(cursor_anchor) == 2, "BLE Suite row cursor count changed"
-    suite = suite.replace(cursor_anchor, 'tft.setCursor(17, yPos + 2);')
+    assert block.count(cursor_anchor) == 2, "BLE Suite row cursor count changed"
+    block = block.replace(cursor_anchor, 'tft.setCursor(17, yPos + 2);')
+    suite = suite[:menu_start] + block + suite[menu_end:]
     suite = replace_once(
         suite,
         '                tft.print(String(idx + 1) + ". " + menuItems[idx]);',
