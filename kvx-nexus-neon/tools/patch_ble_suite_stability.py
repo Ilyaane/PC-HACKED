@@ -132,21 +132,9 @@ def patch(root: Path) -> None:
         'tft.fillRect(13, yPos, tftWidth - 26, rowHeight - 1, kvxConfig.bgColor);',
         "BLE Suite non-selected row background"
     )
-    suite = replace_once(
-        suite,
-        'tft.setCursor(25, yPos + 5);',
-        'tft.setCursor(17, yPos + 2);',
-        "BLE Suite cursor selected"
-    )
-    suite = replace_once(
-        suite,
-        'tft.setCursor(25, yPos + 5);',
-        'tft.setCursor(17, yPos + 2);',
-        "BLE Suite cursor non-selected"
-    ) if suite.count('tft.setCursor(25, yPos + 5);') == 1 else suite
-    # Both source cursors are identical. Replace them in one validated operation
-    # if they still occur as a pair.
-    suite = suite.replace('tft.setCursor(25, yPos + 5);', 'tft.setCursor(17, yPos + 2);')
+    cursor_anchor = 'tft.setCursor(25, yPos + 5);'
+    assert suite.count(cursor_anchor) == 2, "BLE Suite row cursor count changed"
+    suite = suite.replace(cursor_anchor, 'tft.setCursor(17, yPos + 2);')
     suite = replace_once(
         suite,
         '                tft.print(String(idx + 1) + ". " + menuItems[idx]);',
