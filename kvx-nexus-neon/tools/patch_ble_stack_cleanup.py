@@ -1,47 +1,37 @@
 #!/usr/bin/env python3
-"""Fix BLE Suite <-> WiFi transitions and symmetric memory cleanup.
+"""Release BLE Suite and generic BLE radio resources symmetrically.
 
-Do not change BLE payloads, protocol operations or RF transmission capabilities.
-Only lifecycle guards and missing cleanup paths.
+This patch only touches radio lifecycle, not exploit or interference logic.
 """
 from pathlib import Path
 import sys
-
 root=Path(sys.argv[1]).resolve()
 p=root/"src/menu/ble/ble_common.cpp"
 s=p.read_text(encoding="utf-8")
-a="""    if (is_ble_inited) {
-#if !defined(LITE_VERSION)
-        if (BLEStateManager::isBLEActive() || BLEStateManager::getActiveClientCount() > 0) {"""
-b="""#if !defined(LITE_VERSION)
-    if (is_ble_inited || BLEStateManager::isBLEActive() ||
-        BLEStateManager::getActiveClientCount() > 0) {
-        if (BLEStateManager::isBLEActive() || BLEStateManager::getActiveClientCount() > 0) {"""
-assert s.count(a)==1, "BLE teardown guard changed"
-s=s.replace(a,b,1)
-a="""#endif
-            if (BLEDevice::getScan() != nullptr || BLEDevice::getAdvertising() != nullptr ||
-                BLEDevice::getServer() != nullptr || BLEConnected) {"""
-b="""#endif
-            if (BLEDevice::getScan() != nullptr || BLEDevice::getAdvertising() != nullptr ||
-                BLEDevice::getServer() != nullptr || BLEConnected) {"""
-assert s.count(a)==1
-# Complete the matching outer #if block in the new guard.
-anchor="""        }
+start=s.index("    if (is_ble_inited) {\n#if !defined(LITE_VERSION)")
+end=s.index("    pServer = nullptr;",start)
+old=s[start:end]
+assert old.count("BLEStateManager::deinitBLE(true);")==1
+assert old.count("BLEDevice::deinit();")==1
+s=s[:start]+"""#if !defined(LITE_VERSION)
+    // A Suite-owned NimBLE stack must be torn down even if the generic
+    // is_ble_inited flag was never set by ble_scan_setup().
+    if (BLEStateManager::isBLEActive()) {
+        BLEStateManager::deinitBLE(true);
+    } else if (is_ble_inited &&
+               (BLEDevice::getScan()!=nullptr || BLEDevice::getAdvertising()!=nullptr ||
+                BLEDevice::getServer()!=nullptr || BLEConnected)) {
+        BLEDevice::deinit();
     }
-
-    pServer = nullptr;"""
-assert s.count(anchor)==1
-s=s.replace(anchor,"""        }
 #else
-    if (is_ble_inited) {
-        if (BLEDevice::getScan() || BLEDevice::getAdvertising() ||
-            BLEDevice::getServer() || BLEConnected) BLEDevice::deinit();
-#endif
+    if (is_ble_inited &&
+        (BLEDevice::getScan()!=nullptr || BLEDevice::getAdvertising()!=nullptr ||
+         BLEDevice::getServer()!=nullptr || BLEConnected)) {
+        BLEDevice::deinit();
     }
+#endif
 
-    pServer = nullptr;""",1)
-# Leak prevention when BLE scan initialisation failed after reserving RAM.
+"""+s[end:]
 a="""    pBLEScan = BLEDevice::getScan();
     if (!pBLEScan) {
         displayError("Failed to get scan object", true);
@@ -49,12 +39,13 @@ a="""    pBLEScan = BLEDevice::getScan();
     }"""
 b="""    pBLEScan = BLEDevice::getScan();
     if (!pBLEScan) {
+        BLEDevice::deinit();
         is_ble_inited = false;
         uiRamLeaveHeavy();
         displayError("Failed to get scan object", true);
         return false;
     }"""
-assert s.count(a)==1
+assert s.count(a)==1, "BLE scan error cleanup anchor mismatch"
 s=s.replace(a,b,1)
 p.write_text(s,encoding="utf-8")
-print("BLE generic teardown now checks Suite ownership; failed scan releases UI RAM.")
+print("BLE Suite cleanup enabled even when generic BLE scan state is false.")
