@@ -61,6 +61,7 @@ jobs:
           python kvx-nexus-neon/tools/patch_wifi_session_leases.py kvxputer
           python kvx-nexus-neon/tools/patch_ble_lifecycle_checks.py kvxputer
           python kvx-nexus-neon/tools/patch_ble_snapshot_lifetime.py kvxputer
+          python kvx-nexus-neon/tools/patch_clock_persist_immediately.py kvxputer
       - name: Verify patched core integration invariants
         run: python kvx-nexus-neon/tools/check_core_patches.py kvxputer
       - name: Install PlatformIO
