@@ -3,6 +3,7 @@
 #include "root/ui/display.h"
 #include "root/input/mykeyboard.h"
 #include "root/storage/sd_functions.h"
+#include "root/net/wifi_common.h"
 #include "root/app/utils.h"
 #include <globals.h>
 #include "kvx_mqtt_private.h"
@@ -370,7 +371,21 @@ void onKey(uint8_t code,char typed,bool fn,bool shift){
   }else if(currentPage==Page::Detail){
     if(back||enter){currentPage=Page::History;changed=true;}
   }else if(currentPage==Page::Network){
-    if(back||enter){currentPage=Page::Home;changed=true;}
+    if(back){currentPage=Page::Home;changed=true;}
+    else if(enter){
+      // The integrated app shares KVX's radio and credentials. The standalone
+      // MQTT editor's SSID/password fields do not own Wi-Fi association here.
+      if(WiFi.status()!=WL_CONNECTED){
+        const bool wasExiting=returnToMenu;
+        bool connected=wifiConnectMenu();
+        if(!wasExiting) returnToMenu=false; // ESC cancels Wi-Fi, not the MQTT app.
+        setStatus(connected||WiFi.status()==WL_CONNECTED?
+                  "Wi-Fi partage connecte":"Wi-Fi absent : connexion annulee");
+      }else{
+        setStatus("Wi-Fi KVX deja connecte");
+      }
+      changed=true;
+    }
   }
   if(currentPage!=oldPage || selectedTile!=oldTile ||
      selectedHistory!=oldHistory||scrollPos!=oldScroll||
@@ -565,7 +580,7 @@ void drawNetwork(){
   drawText("IP",11,81,C_CYAN,C_PANEL);
   drawText(netWifiUp.load()?trimText(netIp,21):"--",55,81,C_WHITE,C_PANEL);
   drawText(trimText(statusText,34),11,101,C_MUTED,C_PANEL);
-  drawFooter("` / ENTER retour menu");
+  drawFooter("ENTREE connecter Wi-Fi  |  ESC retour");
 }
 void drawSettings(){
   auto &d=tft;
@@ -772,7 +787,7 @@ void appStart(){
   configured=loadConfig();caPem=readCA();
   stopWorker.store(false);workerFinished.store(true);
   if(!sdOK)setStatus("MicroSD absente ou impossible a monter");
-  else if(!configured){startSettings();setStatus("Configurer MQTT (TAB/F1)");}
+  else if(!configured){startSettings();setStatus("Configurer MQTT, ENTREE pour modifier");}
   else if(caPem.isEmpty())setStatus("Installer /mqtt/ca.pem (TLS)");
   else{
     netCfg={cfg.wifiSsid,cfg.wifiPass,cfg.host,cfg.user,cfg.pass,cfg.id,cfg.peer,cfg.port};
