@@ -361,6 +361,34 @@ def patch(root: Path) -> None:
         '    if (is_ble_inited || BLEConnected) {',
         "Bluetooth disconnect catches non-scan BLE sessions"
     )
+    # Keep radio/UI memory ownership balanced when a legacy scan and a
+    # BLE Suite session overlap. A generic Disconnect must not release an
+    # unrelated Wi-Fi canvas reservation a second time.
+    stop_start = common.index("void stopBLEStack()")
+    stop_end = common.index("bool ble_scan_setup()", stop_start)
+    stop = common[stop_start:stop_end]
+    stop = replace_once(
+        stop,
+        '    if (is_ble_inited || BLEConnected) {',
+        '    const bool scanOwnedMemory = is_ble_inited;\n'
+        '    const bool hidOwnedMemory = BLEConnected;\n'
+        '#if !defined(LITE_VERSION)\n'
+        '    const bool suiteOwnedMemory = BLEStateManager::isBLEActive();\n'
+        '#else\n'
+        '    const bool suiteOwnedMemory = false;\n'
+        '#endif\n'
+        '    if (scanOwnedMemory || hidOwnedMemory || suiteOwnedMemory) {',
+        "BLE stack owners tracked before deinitialization"
+    )
+    stop = replace_once(
+        stop,
+        '    uiRamLeaveHeavy();',
+        '    // Suite deinitBLE() already releases its own reservation.\n'
+        '    if (scanOwnedMemory || (hidOwnedMemory && !suiteOwnedMemory))\n'
+        '        uiRamLeaveHeavy();',
+        "BLE teardown avoids double memory-release"
+    )
+    common = common[:stop_start] + stop + common[stop_end:]
     ble_menu_path.write_text(ble_menu, encoding="utf-8")
     suite_path.write_text(suite, encoding="utf-8")
     common_path.write_text(common, encoding="utf-8")
