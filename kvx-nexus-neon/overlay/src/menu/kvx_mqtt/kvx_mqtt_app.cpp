@@ -159,9 +159,8 @@ String readCA(){
 void setStatus(const String &s){
   if(statusText==s)return;
   statusText=s;
-  // Only the Network page actually displays the status text.
-  // Do not make the home/chat/history screen blink for background reconnects.
-  if(currentPage==Page::Network)lastDraw=0;
+  // Network and settings display status; other pages keep stable frames.
+  if(currentPage==Page::Network || currentPage==Page::Settings)lastDraw=0;
 }
 void keepRecent(const Message &m){
   recent.push_back(m);
@@ -275,12 +274,16 @@ void processIncoming(const String &payload){
 }
 void startSettings(){
   inSettings=true;currentPage=Page::Settings;
-  settingsIdx=0;editBuf=strValue(settingKey(settingsIdx));lastDraw=0;
+  settingsIdx=0;editBuf=strValue(settingKey(settingsIdx));
+  statusText="ENTREE : modifier, fleches : champs";lastDraw=0;
 }
 void finishSetting(){
   editBuf.replace("\n","");editBuf.replace("\r","");
   setValue(settingKey(settingsIdx),editBuf);
-  if(settingsIdx+1<SETTINGS_COUNT){settingsIdx++;editBuf=strValue(settingKey(settingsIdx));}
+  if(settingsIdx+1<SETTINGS_COUNT){
+    settingsIdx++;editBuf=strValue(settingKey(settingsIdx));
+    statusText="Champ valide, continuer la configuration";
+  }
   else{
     if(saveConfig()){
       // Reconfigure the native task, never reboot the whole KVX firmware.
@@ -575,8 +578,8 @@ void drawSettings(){
   if(secret&&!revealPassword){shown="";for(size_t i=0;i<editBuf.length();i++)shown+='*';}
   if(shown.length()>35)shown=shown.substring(shown.length()-35);
   drawText(shown,10,77,C_WHITE,C_PANEL);
-  drawText(secret?"TAB afficher / masquer":"Modifier au clavier",7,103,C_MUTED);
-  drawFooter("ENTER suivant | FN+` annuler");
+  drawText(trimText(statusText,38),7,103,C_MUTED);
+  drawFooter("ENTREE modifier  fleches champs  FN+ESC quitter");
 }
 void drawConnectionDots(){
   auto &d=tft;
