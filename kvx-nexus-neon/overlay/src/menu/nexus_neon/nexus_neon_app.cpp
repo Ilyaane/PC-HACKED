@@ -275,13 +275,23 @@ void acceptReply() {
             }
             sPollAt = millis() + (fullPage ? 400UL : kPollMs);
         } else if (rep->op == Op::SEND) {
-            // Preserve the draft and idempotency key on uncertain errors.
-            addHistory(0, ownRole(sRecipient), printable(sDraft), true);
-            sDraft = "";
-            sClientId = "";
-            sStatus = "Message envoye";
-            sView = View::MESSAGES;
-            sPollAt = millis() + 1000;
+            // HTTP 2xx alone does not prove the server saved the message.
+            // A malformed/empty confirmation must preserve the draft and
+            // idempotency key so a retry cannot silently lose user text.
+            JsonDocument receipt;
+            const bool decoded = !deserializeJson(receipt, rep->payload);
+            const uint32_t receiptId = decoded ? (receipt["id"] | 0u) : 0u;
+            if (receiptId == 0) {
+                sStatus = "Envoi non confirme : brouillon conserve";
+                sView = View::STATUS;
+            } else {
+                addHistory(receiptId, ownRole(sRecipient), printable(sDraft), true);
+                sDraft = "";
+                sClientId = "";
+                sStatus = "Message envoye et confirme";
+                sView = View::MESSAGES;
+                sPollAt = millis() + 1000;
+            }
         } else if (rep->op == Op::SESSION) {
             sStatus = "Serveur disponible";
         }

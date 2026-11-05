@@ -70,6 +70,9 @@ class InstallTests(unittest.TestCase):
         self.assertIn("key.fn && key.exit_key", text)
         self.assertIn("NEXUS NEON V10", text)
         self.assertIn("if(rep->op != Op::FETCH", text)
+        self.assertIn('const uint32_t receiptId = decoded ? (receipt["id"] | 0u) : 0u;', text)
+        self.assertIn('Envoi non confirme : brouillon conserve', text)
+        self.assertIn('addHistory(receiptId,', text)
 
     def test_mqtt_native_and_no_wifi_ownership(self):
         text = (ROOT / "overlay/src/menu/kvx_mqtt/kvx_mqtt_app.cpp").read_text()
