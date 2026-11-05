@@ -26,7 +26,7 @@ def change(old,new,count=1):
     global s
     assert s.count(old)==count,("cpp anchor",old[:100],s.count(old))
     s=s.replace(old,new,count)
-change("    snapshotCache = nullptr;","    snapshotCache.reset();")
+# std::shared_ptr accepts nullptr in the constructor without manual delete.
 change("    if (snapshotCache) delete snapshotCache;","    snapshotCache.reset();")
 # Both invalidation sites release only the cache's reference, not any in-flight UI handles.
 change("""            if (snapshotCache) {
