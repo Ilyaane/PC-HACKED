@@ -226,6 +226,107 @@ def patch(root: Path) -> None:
     )
     suite = suite[:menu_start] + menu + suite[menu_end:]
 
+    # Apply the same dense, readable layout to BLE Suite's nested choice
+    # dialogs. They previously had the same two-line 25px viewport.
+    sub_start = suite.index("int showSubMenu(const char *title, const char *options[], int optionCount) {")
+    sub_end = suite.index("// Attack Submenus", sub_start)
+    sub = suite[sub_start:sub_end]
+    sub = replace_once(
+        sub,
+        'int showSubMenu(const char *title, const char *options[], int optionCount) {\n',
+        'int showSubMenu(const char *title, const char *options[], int optionCount) {\n'
+        '    if (optionCount <= 0 || options == nullptr) return -1;\n',
+        "BLE Suite submenu bounds"
+    )
+    sub = replace_once(
+        sub,
+        '    tft.setTextSize(2);\n'
+        '    tft.setTextWrap(true, true);\n'
+        '    tft.setCursor((tftWidth - tft.textWidth(title)) / 2, 15);\n'
+        '    tft.print(title);\n'
+        '    tft.setTextSize(uiDenseFont()) /* BLE Suite custom HUD density */;',
+        '    tft.setTextSize(1);\n'
+        '    tft.setTextWrap(false, false);\n'
+        '    String shortTitle = String(title);\n'
+        '    const int titleChars = max(1, (tftWidth - 22) / 6);\n'
+        '    if ((int)shortTitle.length() > titleChars) shortTitle = shortTitle.substring(0, titleChars - 1) + "~";\n'
+        '    tft.setCursor((tftWidth - tft.textWidth(shortTitle.c_str())) / 2, 13);\n'
+        '    tft.print(shortTitle);\n'
+        '    tft.setTextSize(1);',
+        "BLE Suite submenu compact title"
+    )
+    sub = replace_once(
+        sub,
+        '    int maxVisible = (tftHeight - 80) / 25;',
+        '    const int rowHeight = 12;\n'
+        '    const int firstRowY = 31;\n'
+        '    const int footerTopY = tftHeight - 23;\n'
+        '    const int maxVisible = max(1, (footerTopY - firstRowY) / rowHeight);',
+        "BLE Suite submenu six-row viewport"
+    )
+    sub = replace_once(
+        sub,
+        '            tft.fillRect(20, 60, tftWidth - 40, tftHeight - 115, kvxConfig.bgColor);',
+        '            tft.fillRect(12, firstRowY, tftWidth - 24, footerTopY - firstRowY, kvxConfig.bgColor);',
+        "BLE Suite submenu viewport clear"
+    )
+    sub = replace_once(
+        sub,
+        '                int yPos = 60 + (i * 25);',
+        '                int yPos = firstRowY + (i * rowHeight);',
+        "BLE Suite submenu row coordinates"
+    )
+    sub = replace_once(
+        sub,
+        '                int availWidth = (tftWidth - 40) - 20;',
+        '                int availWidth = tftWidth - 49;',
+        "BLE Suite submenu clip width"
+    )
+    sub = replace_once(
+        sub,
+        'tft.fillRect(20, yPos, tftWidth - 40, 20, TFT_WHITE);',
+        'tft.fillRect(13, yPos, tftWidth - 26, rowHeight - 1, TFT_WHITE);',
+        "BLE Suite submenu selection background"
+    )
+    sub = replace_once(
+        sub,
+        'tft.fillRect(20, yPos, tftWidth - 40, 20, kvxConfig.bgColor);',
+        'tft.fillRect(13, yPos, tftWidth - 26, rowHeight - 1, kvxConfig.bgColor);',
+        "BLE Suite submenu deselection background"
+    )
+    sub_cursor = 'tft.setCursor(25, yPos + 5);'
+    assert sub.count(sub_cursor) == 2, "Submenu row count diverged"
+    sub = sub.replace(sub_cursor, 'tft.setCursor(17, yPos + 2);')
+    sub = replace_once(
+        sub,
+        '                tft.setCursor(tftWidth - 25, 65);\n'
+        '                if (scrollOffset > 0) tft.print("^");\n'
+        '                tft.setCursor(tftWidth - 25, 65 + (maxVisible * 25) - 10);',
+        '                tft.setCursor(tftWidth - 19, firstRowY + 2);\n'
+        '                if (scrollOffset > 0) tft.print("^");\n'
+        '                tft.setCursor(tftWidth - 19, firstRowY + maxVisible * rowHeight - 9);',
+        "BLE Suite submenu scroll positions"
+    )
+    sub = replace_once(
+        sub,
+        '            tft.setCursor(20, tftHeight - 30);\n'
+        '            tft.print("SEL: Select  PREV/NEXT: Navigate");\n'
+        '            tft.setCursor(20, tftHeight - 20);\n'
+        '            tft.print("ESC: Back");',
+        '            tft.setCursor(13, tftHeight - 20);\n'
+        '            tft.print("FLECHES: naviguer  ENTREE: ouvrir");\n'
+        '            tft.setCursor(13, tftHeight - 11);\n'
+        '            tft.print("ESC: retour");',
+        "BLE Suite submenu compact footer"
+    )
+    sub = replace_once(
+        sub,
+        '        if (check(EscPress)) return -1;',
+        '        if (forceHome || returnToMenu || check(EscPress)) return -1;',
+        "BLE Suite submenu safe exit"
+    )
+    suite = suite[:sub_start] + sub + suite[sub_end:]
+
     # BLE scan initialization has to undo its RAM reservation when the
     # scan object cannot be obtained (without changing scanning behavior).
     common = replace_once(
