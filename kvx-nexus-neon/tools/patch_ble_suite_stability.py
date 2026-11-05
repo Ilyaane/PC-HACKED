@@ -91,6 +91,13 @@ def patch(root: Path) -> None:
         "BLE scanner cache releases RAM when cleared"
     )
 
+    suite = replace_once(
+        suite,
+        '#include "root/app/utils.h"\n',
+        '#include "root/app/utils.h"\n#include "root/app/ram_profile.h"\n',
+        "BLE RAM diagnostics import"
+    )
+
     # A welcome animation is not a reason to freeze keyboard input for two
     # seconds, especially on the tiny Cardputer screen.
     suite = replace_once(
@@ -194,6 +201,29 @@ def patch(root: Path) -> None:
         "BLE Suite compact footer"
     )
 
+    menu = replace_once(
+        menu,
+        '    while (true) {\n'
+        '        if (selected != lastSelected || scrollOffset != lastScrollOffset) {',
+        '    while (true) {\n'
+        '        if (selected != lastSelected || scrollOffset != lastScrollOffset) {',
+        "BLE Suite menu loop invariant"
+    )
+    menu = replace_once(
+        menu,
+        '        if (check(EscPress)) {',
+        '        if (forceHome || returnToMenu || check(EscPress)) {',
+        "BLE Suite forced-exit cleanup"
+    )
+    menu = replace_once(
+        menu,
+        '            BLEStateManager::deinitBLE(true);\n'
+        '            return;',
+        '            BLEStateManager::deinitBLE(true);\n'
+        '            RAM_LOG("ble-suite exit");\n'
+        '            return;',
+        "BLE Suite exit RAM diagnostic"
+    )
     suite = suite[:menu_start] + menu + suite[menu_end:]
 
     # BLE scan initialization has to undo its RAM reservation when the
