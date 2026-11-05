@@ -4,6 +4,7 @@
 // Nexus V10: no firmware switch, no mic, no Morse, no token in NVS.
 #include "nexus_neon_app.h"
 #include "nexus_neon_secrets.h"
+#include "nexus_voice.h"
 #include "ca_roots.h"
 #include "root/ui/display.h"
 #include "root/ui/kvx_ui.h"
@@ -34,13 +35,14 @@ constexpr uint16_t kDark = 0x080F;
 constexpr uint16_t kMuted = 0xA514;
 constexpr int kWorkerStack = 12288;
 
-enum class View : uint8_t { HOME, MESSAGES, DETAIL, CONFIRM, STATUS, CONTACT };
+enum class View : uint8_t { HOME, MESSAGES, DETAIL, CONFIRM, STATUS, CONTACT, VOICE };
 enum class Op : uint8_t { FETCH, SEND, SESSION };
 struct Message {
     uint32_t id = 0;
     String author;
     String body;
     bool mine = false;
+    bool voice = false;
 };
 struct NetReply;
 struct NetRequest {
@@ -73,13 +75,14 @@ String sClientId;
 String sStatus = "Pret";
 bool sDirty = true;
 unsigned long sPollAt = 0;
+int sVoiceSelection = 0;
 
 bool isConfigured() {
     return String(NEXUS_NEON_SERVER_URL).startsWith("https://") &&
            strlen(NEXUS_NEON_SHARED_TOKEN) >= 10;
 }
 
-void addHistory(uint32_t id, const String &author, const String &text, bool mine) {
+void addHistory(uint32_t id, const String &author, const String &text, bool mine, bool voice=false) {
     if (text.length() == 0) return;
     if (id != 0) {
         for (int i = 0; i < sCount; ++i)
@@ -93,6 +96,7 @@ void addHistory(uint32_t id, const String &author, const String &text, bool mine
     sItems[sCount].author = author;
     sItems[sCount].body = text;
     sItems[sCount].mine = mine;
+    sItems[sCount].voice = voice;
     sCount++;
     sSelected = sCount - 1;
     sDirty = true;
@@ -175,7 +179,7 @@ void doHttp(void *raw) {
 }
 
 bool beginOperation(Op op, const String &payload = "") {
-    if (sBusy) return false;
+    if (sBusy || NexusVoice::busy()) return false;
     if (!sReplyQueue) {
         sReplyQueue = xQueueCreate(3, sizeof(NetReply *));
         if (!sReplyQueue) { sStatus = "Memoire insuffisante (file)"; return false; }
@@ -260,14 +264,15 @@ void acceptReply() {
                         uint32_t id = item["id"] | 0u;
                         if (id == 0 || id <= sCursor) continue;
                         String kind = item["kind"] | "";
-                        // This version is intentionally text-only.
+                        const String author = item["sender"] | "?";
                         if (kind == "text") {
-                            String author = item["sender"] | "?";
-                            String body = printable(item["text"].as<String>());
-                            addHistory(id, author, body, false);
+                            addHistory(id, author, printable(item["text"].as<String>()), false);
+                            added++;
+                        } else if (kind == "voice") {
+                            addHistory(id, author, "Vocal #" + String(id), false, true);
                             added++;
                         }
-                        // Advance past all kinds; audio isn't supported here.
+                        // Cursor covers text and voice to avoid pagination stalls.
                         sCursor = id;
                     }
                     sStatus = added ? String(added) + " nouveau(x) message(s)" : "Messages a jour";
@@ -345,14 +350,14 @@ void paintFrame(const char *title) {
 
 void drawHome() {
     // Native port of the V10 Neon horizontal carousel, drawn only on input.
-    static const char *labels[4] = {"MESSAGES","ECRIRE","WI-FI","CONTACT"};
-    static const char *captions[4] = {
-        "Conversations texte","Nouveau message",
-        "Connexion partagee","Alice / Bob"
+    static const char *labels[5] = {"MESSAGES","ECRIRE","WI-FI","CONTACT","VOCAL"};
+    static const char *captions[5] = {
+        "Textes et vocaux","Nouveau message",
+        "Connexion partagee","Alice / Bob","Enregistrer / ecouter"
     };
-    static const uint16_t dark[4] = {0x080C,0x180C,0x0026,0x0805};
-    static const uint16_t middle[4] = {0x11C8,0x4209,0x1169,0x1287};
-    static const uint16_t accent[4] = {0x05FF,0xC31F,0x07FF,0x3FEA};
+    static const uint16_t dark[5] = {0x080C,0x180C,0x0026,0x0805,0x1A04};
+    static const uint16_t middle[5] = {0x11C8,0x4209,0x1169,0x1287,0x5209};
+    static const uint16_t accent[5] = {0x05FF,0xC31F,0x07FF,0x3FEA,0xFFE0};
     uint16_t d=dark[sHome],m=middle[sHome],a=accent[sHome];
     tft.fillScreen(0x080F);
     for(int y=22;y<114;y+=3) {
@@ -397,11 +402,17 @@ void drawHome() {
         tft.drawLine(x-25,y+1,x,y-13,0xFFFF);
         tft.drawLine(x,y-13,x+25,y+1,0xFFFF);
         break;
-    default: // two contacts
+    case 3: // two contacts
         tft.fillCircle(x-19,y-9,10,a);
         tft.fillCircle(x+19,y-9,10,0xFFFF);
         tft.fillRoundRect(x-38,y+5,36,25,9,a);
         tft.fillRoundRect(x+2,y+5,36,25,9,0xFFFF);
+        break;
+    default: // microphone
+        tft.fillRoundRect(x-12,y-21,24,32,10,a);
+        tft.drawRoundRect(x-20,y-18,40,42,14,0xFFFF);
+        tft.drawLine(x,y+24,x,y+34,0xFFFF);
+        tft.drawLine(x-14,y+34,x+14,y+34,0xFFFF);
         break;
     }
     tft.fillRoundRect(x-62,87,124,13,3,a);
@@ -419,7 +430,7 @@ void drawMessages() {
     tft.setTextSize(1);
     if (sCount == 0) {
         tft.setTextColor(kMuted, kDark);
-        tft.drawCentreString("Aucun message texte", tftWidth / 2, 53, 1);
+        tft.drawCentreString("Aucun message", tftWidth / 2, 53, 1);
         tft.drawCentreString("Droite : composer", tftWidth / 2, 67, 1);
         return;
     }
@@ -450,6 +461,10 @@ void drawDetail() {
     for (int i = 0; i < lines; ++i) {
         tft.drawString(txt.substring(i * width, (i + 1) * width), 9, 47 + i * 11, 1);
     }
+    if (m.voice && !m.mine) {
+        tft.setTextColor(kNeonGreen,kDark);
+        tft.drawString("ENTREE : ecouter le vocal",9,99,1);
+    }
 }
 
 void drawConfirm() {
@@ -477,6 +492,25 @@ void drawContact() {
     tft.drawCentreString("Entree : sauvegarder", tftWidth/2, 102, 1);
 }
 
+void drawVoice() {
+    paintFrame("NEXUS : MESSAGES VOCAUX");
+    static const char *actions[] = {
+        "Enregistrer (3 s)", "Ecouter mon brouillon",
+        "Envoyer le vocal", "Supprimer brouillon"
+    };
+    tft.setTextSize(1);
+    tft.setTextColor(kNeonCyan,kDark);
+    tft.drawString("Pour : "+sRecipient,9,29,1);
+    tft.setTextColor(kMuted,kDark);
+    tft.drawString(NexusVoice::hasDraft()?"Vocal sauvegarde sur SD":"Aucun vocal en attente",9,42,1);
+    for(int i=0;i<4;i++) {
+        const int y=56+i*13;
+        const uint16_t bg=(i==sVoiceSelection)?0x2940:kDark;
+        tft.fillRoundRect(8,y,tftWidth-16,12,3,bg);
+        tft.setTextColor((i==sVoiceSelection)?kNeonGreen:0xFFFF,bg);
+        tft.drawString(String((i==sVoiceSelection)?"> ":"  ")+actions[i],12,y+2,1);
+    }
+}
 void paint() {
     switch (sView) {
     case View::HOME: drawHome(); break;
@@ -485,6 +519,7 @@ void paint() {
     case View::CONFIRM: drawConfirm(); break;
     case View::CONTACT: drawContact(); break;
     case View::STATUS: paintFrame("ETAT NEXUS"); break;
+    case View::VOICE: drawVoice(); break;
     }
     sDirty = false;
 }
