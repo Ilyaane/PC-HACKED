@@ -322,6 +322,10 @@ void loadContact() {
         sRecipient = saved == "alice" ? "alice" : "bob";
     }
     sActiveRecipient = sRecipient;
+    // On re-entry, recover the correct per-contact draft instead of showing
+    // a draft belonging to the other correspondent.
+    sDraft=sRecipient=="bob"?sDraftBob:sDraftAlice;
+    sClientId=sRecipient=="bob"?sIdBob:sIdAlice;
 }
 
 void saveContact() {
@@ -423,7 +427,8 @@ void drawHome() {
     tft.setTextColor(0x0000,a);
     tft.drawCentreString(labels[sHome],x,89,1);
     tft.setTextColor(0xFFFF,d);
-    tft.drawCentreString(captions[sHome],x,104,1);
+    tft.drawCentreString(sHome==1 ? (String("Vers ")+sRecipient) :
+                         String(captions[sHome]), x,104,1);
     tft.fillRect(0,114,tftWidth,21,0x080F);
     tft.fillRect(0,114,tftWidth,2,a);
     tft.setTextColor(0xD6BA,0x080F);
@@ -692,7 +697,11 @@ void handleKeys(bool &exitApp) {
                 sActiveRecipient = sRecipient;
             }
             saveContact();
+            // Standalone Nexus UX: choose Alice/Bob and type immediately.
+            // The icon-pencil compose tile and existing colored carousel stay.
             sView = View::HOME;
+            sHome = 1;
+            newDraft();
         }
         else if (sView == View::STATUS && !sBusy) sView = View::HOME;
         sDirty = true;
