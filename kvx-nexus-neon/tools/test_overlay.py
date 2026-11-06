@@ -71,6 +71,10 @@ class InstallTests(unittest.TestCase):
         self.assertIn("NEXUS NEON V10", text)
         self.assertIn("NexusVoice::record(sRecipient)", text)
         self.assertIn("NexusVoice::send(sRecipient)", text)
+        # Confirmation of a contact must open the standalone-style editor.
+        self.assertIn("sHome = 1;\n            newDraft();", text)
+        self.assertIn("sDraft=sRecipient==\"bob\"?sDraftBob:sDraftAlice;", text)
+        self.assertIn("case 1: // pencil and compose", text)
         self.assertIn("sDraftBob=sDraft;", text)
         self.assertIn("sDraftAlice=sDraft;", text)
         self.assertIn("sClientId=sRecipient==\"bob\"?sIdBob:sIdAlice;", text)
@@ -119,6 +123,13 @@ class InstallTests(unittest.TestCase):
         self.assertIn('cfg.port=(p>0&&p<65536)?(uint16_t)p:0;', code)
         self.assertIn('if(typed!=String("\\x1B"))', code)
         self.assertIn('currentPage=Page::Settings;', code)
+        # Editing is a transaction: ESC reverts and existing drafts survive reconnect.
+        self.assertIn("beforeSettings=cfg;", code)
+        self.assertIn("cfg=beforeSettings;", code)
+        self.assertIn("settingsIdx=configIsValid()?7:0;", code)
+        self.assertIn("draft=preservedDraft;", code)
+        self.assertIn('if(value.endsWith("\\r"))value.remove(value.length()-1);', code)
+        self.assertIn("SelPress=false;", code)
         self.assertIn('MQTT: hote, compte ou a/b invalide', code)
         # No raw character event is inserted into the 8 config fields.
         fields = code.split('void onKey(')[1].split('void keyPress(')[0]
