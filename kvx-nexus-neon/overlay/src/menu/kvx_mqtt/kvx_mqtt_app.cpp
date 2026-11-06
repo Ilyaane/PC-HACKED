@@ -37,6 +37,7 @@ struct Config {
   String wifiSsid, wifiPass, host, user, pass, id, peer;
   uint16_t port=8883;
 } cfg;
+Config beforeSettings; // Snapshot, so cancelling cannot corrupt live settings.
 struct Message { String id, from, text; uint32_t timestamp=0; };
 
 WiFiClientSecure tls;
@@ -120,7 +121,11 @@ bool loadConfig(){
     if(!line.length()||line.startsWith("#"))continue;
     int pos=line.indexOf('=');if(pos<=0)continue;
     String key=line.substring(0,pos),value=line.substring(pos+1);
-    key.trim();value.trim();setValue(key,value);
+    key.trim();
+    // The standalone editor permits passwords containing apostrophes, '=',
+    // and deliberate leading/trailing spaces. Only strip the CR in CRLF.
+    if(value.endsWith("\r"))value.remove(value.length()-1);
+    setValue(key,value);
   }
   f.close();return configIsValid();
 }
@@ -276,8 +281,12 @@ void processIncoming(const String &payload){
   logHistory(m);keepRecent(m);setStatus("Nouveau message !");lastDraw=0;
 }
 void startSettings(){
+  beforeSettings=cfg; // All eight entries form one transaction.
   inSettings=true;currentPage=Page::Settings;
-  settingsIdx=0;editBuf=strValue(settingKey(settingsIdx));
+  // On an already configured unit, selecting the contact is the common case.
+  // The other seven fields remain accessible through arrows.
+  settingsIdx=configIsValid()?7:0;
+  editBuf=strValue(settingKey(settingsIdx));
   statusText="ENTREE : modifier, fleches : champs";lastDraw=0;
 }
 void finishSetting(){
@@ -289,6 +298,7 @@ void finishSetting(){
   }
   else{
     if(saveConfig()){
+      beforeSettings=cfg; // Committed only after an actual microSD save.
       // Reconfigure the native task, never reboot the whole KVX firmware.
       pendingReconfigure=true;
       stopWorker.store(true);
@@ -338,7 +348,14 @@ void onKey(uint8_t code,char typed,bool fn,bool shift){
   const String oldDraft=draft,oldEdit=editBuf;
   bool changed=false;
   if(currentPage==Page::Settings){
-    if(back){inSettings=false;currentPage=Page::Home;changed=true;}
+    if(code==96 && !fn) {
+      // ESC cancels the whole form, not just the visible keyboard widget.
+      cfg=beforeSettings;
+      inSettings=false;
+      currentPage=Page::Home;
+      statusText="Reglages annules : valeurs restaurees";
+      changed=true;
+    }
     // Raw ported keyboard characters must not be inserted into configuration.
     // Use KVXputer's native editor from keyPress() instead.
   }else if(currentPage==Page::Home){
@@ -415,6 +432,8 @@ void keyPress(){
     }else if(check(SelPress) || (k.pressed && k.enter)){
       String prompt=String("MQTT ")+String(settingsIdx+1)+"/8: "+settingNames[settingsIdx];
       String typed=keyboard(editBuf,110,prompt,settingsIdx==1||settingsIdx==5);
+      // Clear residual confirmation keystrokes before re-entering the form.
+      SelPress=false;
       if(typed!=String("\x1B")){
         editBuf=typed;
         finishSetting();
@@ -811,7 +830,16 @@ void appService(){
   // Reconfiguration is asynchronous so the interface never waits for TLS.
   if(pendingReconfigure && workerFinished.load()){
     pendingReconfigure=false;
+    // Do not lose an unfinished chat draft or jump back to the main tiles
+    // after saving the final configuration field.
+    const String preservedDraft=draft;
     appStart();
+    draft=preservedDraft;
+    if(configured) {
+      currentPage=Page::Network;
+      setStatus("Reglages sauves. Etat de reconnexion ci-dessus");
+    }
+    lastDraw=0;
     return;
   }
   keyPress();serviceNetworkEvents();
