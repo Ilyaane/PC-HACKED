@@ -15,6 +15,7 @@
 #include <SD.h>
 #include <time.h>
 #include <vector>
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
