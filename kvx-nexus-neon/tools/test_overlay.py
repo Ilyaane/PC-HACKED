@@ -148,10 +148,10 @@ class InstallTests(unittest.TestCase):
         target=self.kvx / "src/root/input/mykeyboard.cpp"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(
-            "String generalKeyboard() {\\n"
-            "    bool mask_input = false\\n"
-            ") {\\n"
-            "    max_FM_size = tftWidth / (LW * FM) - 1;\\n"
+            "String generalKeyboard() {\n"
+            "    bool mask_input = false\n"
+            ") {\n"
+            "    max_FM_size = tftWidth / (LW * FM) - 1;\n"
         )
         # Test the actual upstream match, independently from firmware compilation.
         patch(self.kvx)
