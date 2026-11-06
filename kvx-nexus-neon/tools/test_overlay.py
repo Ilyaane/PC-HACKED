@@ -159,6 +159,7 @@ class InstallTests(unittest.TestCase):
         patch(self.kvx)
         self.assertEqual(once,target.read_text())
         self.assertIn("mask_input = false;",once)
+        self.assertEqual(once.count("mask_input = false;"),1)
 
     def test_nexus_allocations_do_not_deadlock(self):
         code = (ROOT / "overlay/src/menu/nexus_neon/nexus_neon_app.cpp").read_text()

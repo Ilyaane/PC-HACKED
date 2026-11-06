@@ -39,6 +39,8 @@ require('String typed=keyboard(editBuf,110,prompt,false);' in mqtt,"MQTT editabl
 require("size_t settingsTextOffset=0;" in mqtt,"MQTT long values can be scrolled")
 require("revealPassword" not in mqtt,"MQTT does not mask characters")
 require("    mask_input = false;" in content("src/root/input/mykeyboard.cpp"),"KVX keyboard unmasked globally")
+require("keyStr = keyStr + \"+\" + i;" not in content("src/root/input/mykeyboard.cpp"),"KVX input never inserts phantom plus in multi-key events")
+require("current_text.length() != (max_FP_size + 1)" in content("src/root/input/mykeyboard.cpp"),"KVX input redraw tracks both text limits")
 require("if(f.size()>8192){f.close();return false;}" in mqtt,"MQTT rejects oversized configuration")
 require("cfg.port=(p>0&&p<65536)?(uint16_t)p:0;" in mqtt,"MQTT rejects invalid TLS ports")
 require('wifiDisconnect();\n    }\n    vTaskDelete(NULL);' in wifi,"WiFi auto task closes failed sessions")
