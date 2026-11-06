@@ -49,7 +49,7 @@ enum class Page : uint8_t { Home, Chat, History, Detail, Network, Settings };
 Page currentPage=Page::Home;
 uint8_t selectedTile=0;
 int selectedHistory=0;
-bool revealPassword=false;
+size_t settingsTextOffset=0; // Fn+left/right scrolls unmasked long fields.
 const uint16_t C_BG=0x0843, C_BAR=0x1087, C_PANEL=0x194A;
 const uint16_t C_CYAN=0x3E7F, C_GREEN=0x562D, C_PURPLE=0xA2FA;
 const uint16_t C_ORANGE=0xFD46, C_WHITE=0xFFFF, C_MUTED=0x9C9A;
@@ -287,6 +287,7 @@ void startSettings(){
   // The other seven fields remain accessible through arrows.
   settingsIdx=configIsValid()?7:0;
   editBuf=strValue(settingKey(settingsIdx));
+  settingsTextOffset=0;
   statusText="ENTREE : modifier, fleches : champs";lastDraw=0;
 }
 void finishSetting(){
@@ -423,19 +424,28 @@ void keyPress(){
   if(currentPage==Page::Settings) {
     // The standalone M5Cardputer inline editor cannot be driven reliably by
     // KVXputer's KeyStroke + global shortcut flags. Never append k.word here.
-    if(up || left){
+    if(k.pressed && k.fn && (left || right)) {
+      // The field is entirely visible in plaintext by scrolling 35 chars.
+      if(left)settingsTextOffset=settingsTextOffset>=35?settingsTextOffset-35:0;
+      if(right)settingsTextOffset=std::min(editBuf.length(),settingsTextOffset+35);
+      lastDraw=0;
+    }else if(up || left){
       if(settingsIdx>0) --settingsIdx;
-      editBuf=strValue(settingKey(settingsIdx));lastDraw=0;
+      editBuf=strValue(settingKey(settingsIdx));
+      settingsTextOffset=0;lastDraw=0;
     }else if(down || right){
       if(settingsIdx+1<SETTINGS_COUNT) ++settingsIdx;
-      editBuf=strValue(settingKey(settingsIdx));lastDraw=0;
+      editBuf=strValue(settingKey(settingsIdx));
+      settingsTextOffset=0;lastDraw=0;
     }else if(check(SelPress) || (k.pressed && k.enter)){
       String prompt=String("MQTT ")+String(settingsIdx+1)+"/8: "+settingNames[settingsIdx];
-      String typed=keyboard(editBuf,110,prompt,settingsIdx==1||settingsIdx==5);
+      // Explicit local-only visibility: show passwords as actual characters.
+      String typed=keyboard(editBuf,110,prompt,false);
       // Clear residual confirmation keystrokes before re-entering the form.
       SelPress=false;
       if(typed!=String("\x1B")){
         editBuf=typed;
+        settingsTextOffset=0;
         finishSetting();
       }else{
         setStatus("Modification annulee : ancienne valeur conservee");
@@ -607,15 +617,15 @@ void drawSettings(){
   auto &d=tft;
   drawText("CONFIGURATION  "+String(settingsIdx+1)+" / "+String(SETTINGS_COUNT),7,30,C_CYAN);
   drawText(trimText(settingNames[settingsIdx],34),7,47,C_WHITE);
-  d.fillRoundRect(5,65,230,32,5,C_PANEL);
-  d.drawRoundRect(5,65,230,32,5,C_ORANGE);
-  String shown=editBuf;
-  bool secret=settingsIdx==1||settingsIdx==5;
-  if(secret&&!revealPassword){shown="";for(size_t i=0;i<editBuf.length();i++)shown+='*';}
-  if(shown.length()>35)shown=shown.substring(shown.length()-35);
-  drawText(shown,10,77,C_WHITE,C_PANEL);
-  drawText(trimText(statusText,38),7,103,C_MUTED);
-  drawFooter("ENTREE modifier  fleches champs  FN+ESC quitter");
+  d.fillRoundRect(5,65,230,40,5,C_PANEL);
+  d.drawRoundRect(5,65,230,40,5,C_ORANGE);
+  // Never replace characters with asterisks. Show up to 70 characters
+  // in two readable rows; Fn+left/right pages through longer values.
+  const size_t start=std::min(settingsTextOffset,editBuf.length());
+  drawText(editBuf.substring(start,start+35),10,73,C_WHITE,C_PANEL);
+  drawText(editBuf.substring(start+35,start+70),10,88,C_WHITE,C_PANEL);
+  drawText(trimText(statusText,38),7,109,C_MUTED);
+  drawFooter("ENTREE editer  FLECHES champs  FN+< > defiler");
 }
 void drawConnectionDots(){
   auto &d=tft;

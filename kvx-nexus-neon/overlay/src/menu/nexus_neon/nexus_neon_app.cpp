@@ -297,6 +297,8 @@ void acceptReply() {
                 addHistory(receiptId, ownRole(sRecipient), printable(sDraft), true);
                 sDraft = "";
                 sClientId = "";
+                if(sRecipient=="bob"){sDraftBob="";sIdBob="";}
+                else{sDraftAlice="";sIdAlice="";}
                 sStatus = "Message envoye et confirme";
                 sView = View::MESSAGES;
                 sPollAt = millis() + 1000;
@@ -545,8 +547,10 @@ void newDraft() {
     if (typed.isEmpty()) { sStatus = "Message vide : annule"; sDirty = true; return; }
     if (typed.length() > kMaxText) typed = typed.substring(0, kMaxText);
     sDraft = typed;
-    // Keep the idempotency key for retries, but refresh it for new content.
+    // A new message must never reuse the idempotency key of an older draft.
     sClientId = "";
+    if(sRecipient=="bob"){sDraftBob=sDraft;sIdBob="";}
+    else{sDraftAlice=sDraft;sIdAlice="";}
     sView = View::CONFIRM;
     sDirty = true;
 }
@@ -561,6 +565,8 @@ void sendDraft() {
     if (sClientId.isEmpty()) {
         sClientId = String("kvx-") + String((uint32_t)esp_random(), HEX) +
                     String((uint32_t)esp_random(), HEX);
+        if(sRecipient=="bob")sIdBob=sClientId;
+        else sIdAlice=sClientId;
     }
     JsonDocument data;
     data["to"] = sRecipient;

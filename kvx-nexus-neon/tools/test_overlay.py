@@ -77,6 +77,8 @@ class InstallTests(unittest.TestCase):
         self.assertIn("case 1: // pencil and compose", text)
         self.assertIn("sDraftBob=sDraft;", text)
         self.assertIn("sDraftAlice=sDraft;", text)
+        self.assertIn('if(sRecipient=="bob"){sDraftBob=sDraft;sIdBob="";}', text)
+        self.assertIn("else sIdAlice=sClientId;", text)
         self.assertIn("sClientId=sRecipient==\"bob\"?sIdBob:sIdAlice;", text)
         self.assertIn("NexusVoice::receive(id,ownRole(sRecipient))", text)
         self.assertIn('kind == "voice"', text)
@@ -116,8 +118,11 @@ class InstallTests(unittest.TestCase):
         self.assertIn('#include "root/storage/sd_functions.h"', code)
         self.assertIn("sdOK=setupSdCard() && sdcardMounted", code)
         self.assertIn('SD.open(CONFIG_FILE,FILE_READ)', code)
-        self.assertIn('String typed=keyboard(editBuf,110,prompt,settingsIdx==1||settingsIdx==5)', code)
-        self.assertIn('bool revealPassword=false;', code)
+        self.assertIn('String typed=keyboard(editBuf,110,prompt,false)', code)
+        self.assertIn("size_t settingsTextOffset=0;", code)
+        self.assertIn("const size_t start=std::min(settingsTextOffset,editBuf.length())", code)
+        self.assertNotIn("shown+='*'", code)
+        self.assertNotIn("revealPassword", code)
         self.assertIn('if(f.size()>8192){f.close();return false;}', code)
         self.assertIn('cfg.port>0 && validNode(cfg.id)', code)
         self.assertIn('cfg.port=(p>0&&p<65536)?(uint16_t)p:0;', code)
@@ -137,6 +142,23 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn('editBuf+=typed', setting_branch)
         last = code.split('void finishSetting()')[1].split('void navigateHistory(')[0]
         self.assertNotIn('settingsIdx=0', last)
+
+    def test_plaintext_keyboard_patch_is_idempotent(self):
+        from patch_keyboard_plaintext import patch
+        target=self.kvx / "src/root/input/mykeyboard.cpp"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "String generalKeyboard() {\\n"
+            "    bool mask_input = false\\n"
+            ") {\\n"
+            "    max_FM_size = tftWidth / (LW * FM) - 1;\\n"
+        )
+        # Test the actual upstream match, independently from firmware compilation.
+        patch(self.kvx)
+        once=target.read_text()
+        patch(self.kvx)
+        self.assertEqual(once,target.read_text())
+        self.assertIn("mask_input = false;",once)
 
     def test_nexus_allocations_do_not_deadlock(self):
         code = (ROOT / "overlay/src/menu/nexus_neon/nexus_neon_app.cpp").read_text()
