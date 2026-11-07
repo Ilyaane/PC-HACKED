@@ -1,0 +1,54 @@
+name: Recover the verified KVX Cardputer ADV application image
+on:
+  push:
+    branches:
+      - kvx-core-stabilisation-rebuild-20261105
+    paths:
+      - '.github/workflows/kvx-plaintext-bin-handoff.yml'
+permissions:
+  contents: read
+  actions: read
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Download successful validated run archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/Ilyaane/PC-HACKED/actions/artifacts/13474749620/zip" \
+            -o /tmp/verified-kvx-archive.zip
+          unzip -t /tmp/verified-kvx-archive.zip
+          mkdir -p extracted delivery
+          unzip -q /tmp/verified-kvx-archive.zip -d extracted
+          test -s extracted/KVXputer_NexusV10_MQTTV5.bin.enc
+      - name: Decrypt previously validated firmware app
+        env:
+          NEXUS_SHARED_TOKEN: ${{ secrets.NEXUS_SHARED_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NEXUS_SHARED_TOKEN"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 \
+            -in extracted/KVXputer_NexusV10_MQTTV5.bin.enc \
+            -out delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin \
+            -pass env:NEXUS_SHARED_TOKEN
+          python - <<'PY'
+          from hashlib import sha256
+          from pathlib import Path
+          p=Path("delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin")
+          data=p.read_bytes()
+          print("bytes:", len(data), "sha256:", sha256(data).hexdigest())
+          assert len(data) < 6160384, "App exceeds partition size"
+          assert data[0] == 0xE9, "Not an ESP32 app image"
+          PY
+      - name: Upload directly flashable app-image BIN
+        uses: actions/upload-artifact@v4
+        with:
+          name: KVXputer-NexusV10-MQTTV5-ADV-APP-BIN
+          path: delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin
+          if-no-files-found: error
+          retention-days: 1
