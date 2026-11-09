@@ -51,6 +51,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: KVX-974-ADV-APP-BIN
-          path: delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin
+          path: 'delivery/KVX 974_APP.bin'
           if-no-files-found: error
           retention-days: 1
