@@ -43,6 +43,13 @@ class InstallTests(unittest.TestCase):
         self.assertTrue((self.kvx / "src/menu/kvx_mqtt/kvx_mqtt_app.cpp").is_file())
         self.assertEqual((self.kvx / "platformio.ini").read_text().count("256dpi/MQTT@2.5.2"), 1)
         self.assertIn("KvxMqttMenu kvxMqttMenu", menu)
+        # New artwork stays in the two native menu tiles.
+        nexus_icon=(self.kvx / "src/menu/nexus_neon/nexus_neon_menu.cpp").read_text()
+        mqtt_icon=(self.kvx / "src/menu/kvx_mqtt/kvx_mqtt_menu.cpp").read_text()
+        self.assertIn("fillTriangle", nexus_icon)
+        self.assertIn("fillRoundRect", nexus_icon)
+        self.assertIn("three endpoints", mqtt_icon)
+        self.assertIn("fillCircle", mqtt_icon)
         self.assertIn('#define KVX_MQTT_HOST ""',
                       (self.kvx / "src/menu/kvx_mqtt/kvx_mqtt_private.h").read_text())
         self.assertIn('#define NEXUS_NEON_SHARED_TOKEN ""',
@@ -128,7 +135,10 @@ class InstallTests(unittest.TestCase):
         # Editing is a transaction: ESC reverts and existing drafts survive reconnect.
         self.assertIn("beforeSettings=cfg;", code)
         self.assertIn("cfg=beforeSettings;", code)
-        self.assertIn("settingsIdx=configIsValid()?7:0;", code)
+        self.assertIn("settingsIdx=configIsValid()?2:0;", code)
+        self.assertIn("WiFi.hostByName(netCfg.host.c_str(),brokerIp)", code)
+        self.assertIn("tls.lastError(tlsInfo,sizeof(tlsInfo))", code)
+        self.assertIn("MQTT TCP/TLS: hote, port, CA", code)
         self.assertIn("draft=preservedDraft;", code)
         self.assertIn('if(value.endsWith("\\r"))value.remove(value.length()-1);', code)
         self.assertIn("SelPress=false;", code)

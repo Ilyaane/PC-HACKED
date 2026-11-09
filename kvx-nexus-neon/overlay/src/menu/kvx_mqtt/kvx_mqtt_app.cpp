@@ -284,9 +284,10 @@ void processIncoming(const String &payload){
 void startSettings(){
   beforeSettings=cfg; // All eight entries form one transaction.
   inSettings=true;currentPage=Page::Settings;
-  // On an already configured unit, selecting the contact is the common case.
-  // The other seven fields remain accessible through arrows.
-  settingsIdx=configIsValid()?7:0;
+  // Expose the broker first when already configured: this is useful when
+  // the MQTT TLS connection fails and the user needs to inspect host/port.
+  // All eight fields remain reachable using the arrow keys.
+  settingsIdx=configIsValid()?2:0;
   editBuf=strValue(settingKey(settingsIdx));
   settingsTextOffset=0;
   statusText="ENTREE : modifier, fleches : champs";lastDraw=0;
@@ -725,7 +726,11 @@ void networkTask(void*){
         lastMqttAttempt=now;
         notifyUi("Connexion MQTT TLS...");
         const String clientId=String("nmqtt-")+netCfg.id;
-        if(mqtt.connect(clientId.c_str(),netCfg.user.c_str(),netCfg.pass.c_str())){
+        IPAddress brokerIp;
+        if(!WiFi.hostByName(netCfg.host.c_str(),brokerIp)){
+          notifyUi("MQTT: DNS broker introuvable");
+        }
+        else if(mqtt.connect(clientId.c_str(),netCfg.user.c_str(),netCfg.pass.c_str())){
           if(mqtt.subscribe(topicFor(netCfg.id),1)){
             netMqttUp.store(true);notifyUi("MQTT connecte");
           }else{
@@ -734,8 +739,13 @@ void networkTask(void*){
         }else {
           const int rc=int(mqtt.returnCode());
           const int err=int(mqtt.lastError());
+          char tlsInfo[100]={};
+          const int tlsCode=tls.lastError(tlsInfo,sizeof(tlsInfo));
           String diag=rc==4?"MQTT: identifiants refuses":
                       rc==5?"MQTT: autorisation refusee":
+                      err==-3 && tlsCode!=0?
+                        "MQTT TLS err="+String(tlsCode):
+                      err==-3?"MQTT TCP/TLS: hote, port, CA":
                       String("MQTT e=")+String(err)+" rc="+String(rc);
           notifyUi(diag.c_str());
         }

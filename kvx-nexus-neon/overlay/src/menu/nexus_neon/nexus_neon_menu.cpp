@@ -5,19 +5,16 @@
 void NexusNeonMenu::optionsMenu() { nexusNeonApp(); }
 
 void NexusNeonMenu::drawIcon(float scale) {
-    // Draw in KVXputer's own tile coordinates, preserving clip and theme colors.
     clearIconArea();
-    const int w = (int)(50 * scale);
-    const int h = (int)(32 * scale);
-    const int x = iconCenterX - w / 2;
-    const int y = iconCenterY - h / 2;
-    const int r = (int)(5 * scale) + 1;
-    tft.drawRoundRect(x, y, w, h, r, kvxConfig.secColor);
-    tft.drawRoundRect(x + 2, y + 2, w - 4, h - 4, r, kvxConfig.priColor);
-    tft.drawLine(x + w/4, y + h, x + w/4 - 5, y + h + 5, kvxConfig.secColor);
-    tft.drawLine(x + w/4 - 5, y + h + 5, x + w/4 + 8, y + h, kvxConfig.secColor);
-    const int cy = y + h/2;
-    tft.fillCircle(x + w/4, cy, 2, kvxConfig.secColor);
-    tft.fillCircle(x + w/2, cy, 2, kvxConfig.secColor);
-    tft.fillCircle(x + w*3/4, cy, 2, kvxConfig.secColor);
+    // Two compact overlapping message bubbles in the user's KVX theme.
+    const int w=(int)(42*scale),h=(int)(28*scale);
+    const int x=iconCenterX-w/2,y=iconCenterY-h/2;
+    const int r=(int)(4*scale)+1;
+    tft.fillRoundRect(x+8,y-5,w-7,h,r,kvxConfig.secColor);
+    tft.fillRoundRect(x+11,y-2,w-13,h-5,r,kvxConfig.bgColor);
+    tft.fillRoundRect(x,y+5,w-5,h,r,kvxConfig.priColor);
+    tft.fillRoundRect(x+3,y+8,w-11,h-6,r,kvxConfig.bgColor);
+    tft.fillTriangle(x+10,y+h+3,x+10,y+h+9,x+20,y+h+3,kvxConfig.priColor);
+    tft.drawFastHLine(x+11,y+16,(int)(24*scale)+1,kvxConfig.secColor);
+    tft.drawFastHLine(x+11,y+22,(int)(17*scale)+1,kvxConfig.secColor);
 }

@@ -6,12 +6,16 @@ void KvxMqttMenu::optionsMenu() { kvxMqttApp(); }
 
 void KvxMqttMenu::drawIcon(float scale) {
     clearIconArea();
-    const int cx=iconCenterX, cy=iconCenterY;
-    const int r=(int)(21*scale);
-    const int d=(int)(5*scale)+1;
-    tft.drawRoundRect(cx-r, cy-r/2, 2*r, r, d, kvxConfig.secColor);
-    tft.fillCircle(cx-r/2, cy, 3*scale+1, kvxConfig.priColor);
-    tft.fillCircle(cx+r/2, cy, 3*scale+1, kvxConfig.priColor);
-    tft.drawLine(cx-r/2, cy, cx+r/2, cy, kvxConfig.secColor);
-    tft.drawLine(cx, cy-r/2+3, cx, cy+r/2-3, kvxConfig.priColor);
+    // Distinct MQTT hub: three endpoints joined by a bright triangular route.
+    const int x=iconCenterX,y=iconCenterY,s=(int)(20*scale)+1;
+    const int big=(int)(6*scale)+2,small=(int)(3*scale)+1;
+    tft.drawLine(x,y-s,x-s,y+s/2,kvxConfig.secColor);
+    tft.drawLine(x,y-s,x+s,y+s/2,kvxConfig.secColor);
+    tft.drawLine(x-s,y+s/2,x+s,y+s/2,kvxConfig.priColor);
+    tft.fillCircle(x,y-s,big,kvxConfig.priColor);
+    tft.fillCircle(x-s,y+s/2,big,kvxConfig.secColor);
+    tft.fillCircle(x+s,y+s/2,big,kvxConfig.secColor);
+    tft.fillCircle(x,y-s,small,kvxConfig.bgColor);
+    tft.fillCircle(x-s,y+s/2,small,kvxConfig.bgColor);
+    tft.fillCircle(x+s,y+s/2,small,kvxConfig.bgColor);
 }
