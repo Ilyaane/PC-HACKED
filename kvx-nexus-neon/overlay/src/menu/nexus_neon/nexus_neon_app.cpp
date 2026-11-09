@@ -4,7 +4,6 @@
 // Nexus V10: no firmware switch, no mic, no Morse, no token in NVS.
 #include "nexus_neon_app.h"
 #include "nexus_neon_secrets.h"
-#include "nexus_voice.h"
 #include "ca_roots.h"
 #include "root/ui/display.h"
 #include "root/ui/kvx_ui.h"
@@ -35,14 +34,13 @@ constexpr uint16_t kDark = 0x080F;
 constexpr uint16_t kMuted = 0xA514;
 constexpr int kWorkerStack = 12288;
 
-enum class View : uint8_t { HOME, MESSAGES, DETAIL, CONFIRM, STATUS, CONTACT, VOICE };
+enum class View : uint8_t { HOME, MESSAGES, DETAIL, CONFIRM, STATUS, CONTACT, WIFI_STATUS };
 enum class Op : uint8_t { FETCH, SEND, SESSION };
 struct Message {
     uint32_t id = 0;
     String author;
     String body;
     bool mine = false;
-    bool voice = false;
 };
 struct NetReply;
 struct NetRequest {
@@ -57,6 +55,7 @@ struct NetReply {
     uint32_t generation = 0;
     Op op = Op::FETCH;
     int code = -1;
+    int tlsError = 0;
     String payload;
 };
 
@@ -77,16 +76,13 @@ String sDraftAlice, sDraftBob, sIdAlice, sIdBob;
 String sStatus = "Pret";
 bool sDirty = true;
 unsigned long sPollAt = 0;
-int sVoiceSelection = 0;
-uint32_t sRequestedVoiceId = 0;
-String sRequestedVoiceRecipient;
 
 bool isConfigured() {
     return String(NEXUS_NEON_SERVER_URL).startsWith("https://") &&
            strlen(NEXUS_NEON_SHARED_TOKEN) >= 10;
 }
 
-void addHistory(uint32_t id, const String &author, const String &text, bool mine, bool voice=false) {
+void addHistory(uint32_t id, const String &author, const String &text, bool mine) {
     if (text.length() == 0) return;
     if (id != 0) {
         for (int i = 0; i < sCount; ++i)
@@ -100,7 +96,6 @@ void addHistory(uint32_t id, const String &author, const String &text, bool mine
     sItems[sCount].author = author;
     sItems[sCount].body = text;
     sItems[sCount].mine = mine;
-    sItems[sCount].voice = voice;
     sCount++;
     sSelected = sCount - 1;
     sDirty = true;
@@ -168,6 +163,10 @@ void doHttp(void *raw) {
                         }
                     }
                 }
+                if (rep->code < 0) {
+                    char tlsMessage[96] = {};
+                    rep->tlsError = client.lastError(tlsMessage, sizeof(tlsMessage));
+                }
                 http.end();
             } else {
                 rep->code = -5;
@@ -183,7 +182,7 @@ void doHttp(void *raw) {
 }
 
 bool beginOperation(Op op, const String &payload = "") {
-    if (sBusy || NexusVoice::busy()) return false;
+    if (sBusy) return false;
     if (!sReplyQueue) {
         sReplyQueue = xQueueCreate(3, sizeof(NetReply *));
         if (!sReplyQueue) { sStatus = "Memoire insuffisante (file)"; return false; }
@@ -249,7 +248,10 @@ void acceptReply() {
                       rep->code == -3 ? "Jeton compile absent" :
                       rep->code == -4 ? "Heure TLS indisponible" :
                       rep->code == -6 ? "Reponse trop volumineuse" :
-                      "Reseau / serveur: " + String(rep->code);
+                      rep->code == -1 && rep->tlsError != 0 ?
+                        "Erreur TLS " + String(rep->tlsError) :
+                      rep->code == -1 ? "HTTPS -1: DNS / TLS / serveur" :
+                      "HTTP serveur " + String(rep->code);
         } else if (rep->op == Op::FETCH) {
             bool fullPage = false;
             JsonDocument doc;
@@ -272,10 +274,7 @@ void acceptReply() {
                         if (kind == "text") {
                             addHistory(id, author, printable(item["text"].as<String>()), false);
                             added++;
-                        } else if (kind == "voice") {
-                            addHistory(id, author, "Vocal #" + String(id), false, true);
-                            added++;
-                        }
+                        } // Ignore les vocaux dans ce module texte.
                         // Cursor covers text and voice to avoid pagination stalls.
                         sCursor = id;
                     }
@@ -360,14 +359,14 @@ void paintFrame(const char *title) {
 
 void drawHome() {
     // Native port of the V10 Neon horizontal carousel, drawn only on input.
-    static const char *labels[5] = {"MESSAGES","ECRIRE","WI-FI","CONTACT","VOCAL"};
-    static const char *captions[5] = {
-        "Textes et vocaux","Nouveau message",
-        "Connexion partagee","Alice / Bob","Enregistrer / ecouter"
+    static const char *labels[4] = {"MESSAGES","ECRIRE","WI-FI","CONTACT"};
+    static const char *captions[4] = {
+        "Conversations texte","Nouveau message",
+        "Etat et choix reseau","Alice / Bob"
     };
-    static const uint16_t dark[5] = {0x080C,0x180C,0x0026,0x0805,0x1A04};
-    static const uint16_t middle[5] = {0x11C8,0x4209,0x1169,0x1287,0x5209};
-    static const uint16_t accent[5] = {0x05FF,0xC31F,0x07FF,0x3FEA,0xFFE0};
+    static const uint16_t dark[4] = {0x080C,0x180C,0x0026,0x0805};
+    static const uint16_t middle[4] = {0x11C8,0x4209,0x1169,0x1287};
+    static const uint16_t accent[4] = {0x05FF,0xC31F,0x07FF,0x3FEA};
     uint16_t d=dark[sHome],m=middle[sHome],a=accent[sHome];
     tft.fillScreen(0x080F);
     for(int y=22;y<114;y+=3) {
@@ -418,12 +417,6 @@ void drawHome() {
         tft.fillRoundRect(x-38,y+5,36,25,9,a);
         tft.fillRoundRect(x+2,y+5,36,25,9,0xFFFF);
         break;
-    default: // microphone
-        tft.fillRoundRect(x-12,y-21,24,32,10,a);
-        tft.drawRoundRect(x-20,y-18,40,42,14,0xFFFF);
-        tft.drawLine(x,y+24,x,y+34,0xFFFF);
-        tft.drawLine(x-14,y+34,x+14,y+34,0xFFFF);
-        break;
     }
     tft.fillRoundRect(x-62,87,124,13,3,a);
     tft.setTextColor(0x0000,a);
@@ -472,10 +465,7 @@ void drawDetail() {
     for (int i = 0; i < lines; ++i) {
         tft.drawString(txt.substring(i * width, (i + 1) * width), 9, 47 + i * 11, 1);
     }
-    if (m.voice && !m.mine) {
-        tft.setTextColor(kNeonGreen,kDark);
-        tft.drawString("ENTREE : ecouter le vocal",9,99,1);
-    }
+
 }
 
 void drawConfirm() {
@@ -503,24 +493,46 @@ void drawContact() {
     tft.drawCentreString("Entree : sauvegarder", tftWidth/2, 102, 1);
 }
 
-void drawVoice() {
-    paintFrame("NEXUS : MESSAGES VOCAUX");
-    static const char *actions[] = {
-        "Enregistrer (3 s)", "Ecouter mon brouillon",
-        "Envoyer le vocal", "Supprimer brouillon"
-    };
+void drawStatus() {
+    paintFrame("ETAT NEXUS");
     tft.setTextSize(1);
+    tft.setTextColor(0xFFFF,kDark);
+    tft.drawString(cut(sStatus,36),8,37,1);
     tft.setTextColor(kNeonCyan,kDark);
-    tft.drawString("Pour : "+sRecipient,9,29,1);
-    tft.setTextColor(kMuted,kDark);
-    tft.drawString(NexusVoice::hasDraft()?"Vocal sauvegarde sur SD":"Aucun vocal en attente",9,42,1);
-    for(int i=0;i<4;i++) {
-        const int y=56+i*13;
-        const uint16_t bg=(i==sVoiceSelection)?0x2940:kDark;
-        tft.fillRoundRect(8,y,tftWidth-16,12,3,bg);
-        tft.setTextColor((i==sVoiceSelection)?kNeonGreen:0xFFFF,bg);
-        tft.drawString(String((i==sVoiceSelection)?"> ":"  ")+actions[i],12,y+2,1);
+    tft.drawString(WiFi.status()==WL_CONNECTED?"Wi-Fi: connecte":"Wi-Fi: absent",8,58,1);
+    tft.drawString("HTTPS: URL, DNS, CA, heure",8,73,1);
+    tft.setTextColor(kNeonGreen,kDark);
+    tft.drawString("ENTREE: retour   ESC: accueil",8,94,1);
+}
+void drawWifiStatus() {
+    paintFrame("RESEAU KVX PARTAGE");
+    tft.setTextSize(1);
+    if(WiFi.status()==WL_CONNECTED) {
+        tft.setTextColor(kNeonGreen,kDark);
+        tft.drawString("Reseau: "+cut(WiFi.SSID(),27),8,35,1);
+        tft.drawString("IP: "+WiFi.localIP().toString(),8,53,1);
+        tft.setTextColor(0xFFFF,kDark);
+        tft.drawString("ENTREE: changer le reseau",8,77,1);
+        tft.drawString("(coupe la connexion actuelle)",8,92,1);
+    } else {
+        tft.setTextColor(kMuted,kDark);
+        tft.drawString("Wi-Fi non connecte",8,42,1);
+        tft.setTextColor(kNeonCyan,kDark);
+        tft.drawString("ENTREE: choisir reseau KVX",8,75,1);
     }
+}
+void openKvxWifiMenu() {
+    // The upstream chooser intentionally refuses when already connected.
+    // Disconnect only on an explicit action from the network status screen.
+    const bool wasExiting=returnToMenu;
+    if(WiFi.status()==WL_CONNECTED) wifiDisconnect();
+    const bool ok=wifiConnectMenu(WIFI_STA);
+    if(!wasExiting) returnToMenu=false;
+    EscPress=false;SelPress=false;PrevPress=false;NextPress=false;
+    UpPress=false;DownPress=false;
+    sStatus=(ok||WiFi.status()==WL_CONNECTED)?
+      "Wi-Fi KVX connecte":"Wi-Fi annule/connexion echouee";
+    sDirty=true;
 }
 void paint() {
     switch (sView) {
@@ -529,8 +541,8 @@ void paint() {
     case View::DETAIL: drawDetail(); break;
     case View::CONFIRM: drawConfirm(); break;
     case View::CONTACT: drawContact(); break;
-    case View::STATUS: paintFrame("ETAT NEXUS"); break;
-    case View::VOICE: drawVoice(); break;
+    case View::STATUS: drawStatus(); break;
+    case View::WIFI_STATUS: drawWifiStatus(); break;
     }
     sDirty = false;
 }
@@ -577,23 +589,6 @@ void sendDraft() {
     if (beginOperation(Op::SEND, body)) sView = View::STATUS;
 }
 
-void voiceAction() {
-    if (sBusy) {sStatus="Attendre la fin du HTTPS";sDirty=true;return;}
-    if (sVoiceSelection==0) {
-        sStatus="Enregistrement vocal (3 secondes)";
-        sDirty=true;
-        paint();
-        NexusVoice::record(sRecipient);
-    } else if (sVoiceSelection==1) {
-        NexusVoice::playDraft();
-    } else if (sVoiceSelection==2) {
-        if (NexusVoice::send(sRecipient)) sView=View::STATUS;
-    } else if (sVoiceSelection==3) {
-        NexusVoice::removeDraft();
-    }
-    sStatus=NexusVoice::status();
-    sDirty=true;
-}
 bool pressed(volatile bool &flag) { return check(flag); }
 
 void handleHomeSelect() {
@@ -603,18 +598,10 @@ void handleHomeSelect() {
     } else if (sHome == 1) {
         newDraft();
     } else if (sHome == 2) {
-        if (WiFi.status() == WL_CONNECTED) {
-            sStatus = "Wi-Fi deja connecte";
-        } else {
-            // Reuse KVXputer's own Wi-Fi UI and saved network manager.
-            wifiConnectMenu();
-            sStatus = WiFi.status() == WL_CONNECTED ? "Wi-Fi connecte" : "Wi-Fi non connecte";
-        }
+        sView=View::WIFI_STATUS;
+        sStatus=WiFi.status()==WL_CONNECTED?"Wi-Fi KVX partage actif":"Wi-Fi non connecte";
     } else if (sHome==3) {
         sView=View::CONTACT;
-    } else {
-        if (NexusVoice::storage()) {sVoiceSelection=0;sView=View::VOICE;}
-        else sStatus="Inserer une microSD pour les vocaux";
     }
     sDirty=true;
 }
@@ -641,26 +628,24 @@ void handleKeys(bool &exitApp) {
         return;
     }
     if (pressed(UpPress)) {
-        if (sView == View::HOME) sHome = (sHome + 4) % 5;
+        if (sView == View::HOME) sHome = (sHome + 3) % 4;
         else if (sView == View::MESSAGES && sCount) sSelected = max(0, sSelected - 1);
-        else if (sView == View::VOICE) sVoiceSelection=(sVoiceSelection+3)%4;
         sDirty = true;
     }
     if (pressed(DownPress)) {
-        if (sView == View::HOME) sHome = (sHome + 1) % 5;
+        if (sView == View::HOME) sHome = (sHome + 1) % 4;
         else if (sView == View::MESSAGES && sCount) sSelected = min(sCount - 1, sSelected + 1);
-        else if (sView == View::VOICE) sVoiceSelection=(sVoiceSelection+1)%4;
         sDirty = true;
     }
     if (pressed(PrevPress)) {
-        if (sView == View::HOME) sHome = (sHome + 4) % 5;
+        if (sView == View::HOME) sHome = (sHome + 3) % 4;
         else if (sView == View::MESSAGES && !sBusy) beginOperation(Op::FETCH);
         else if (sView == View::CONTACT) sRecipient = sRecipient == "bob" ? "alice" : "bob";
         else if (sView == View::DETAIL && sCount) sSelected = max(0, sSelected - 1);
         sDirty = true;
     }
     if (pressed(NextPress)) {
-        if (sView == View::HOME) sHome = (sHome + 1) % 5;
+        if (sView == View::HOME) sHome = (sHome + 1) % 4;
         else if (sView == View::MESSAGES && !sBusy) newDraft();
         else if (sView == View::CONTACT) sRecipient = sRecipient == "bob" ? "alice" : "bob";
         else if (sView == View::DETAIL && sCount) sSelected = min(sCount - 1, sSelected + 1);
@@ -669,19 +654,8 @@ void handleKeys(bool &exitApp) {
     if (pressed(SelPress)) {
         if (sView == View::HOME) handleHomeSelect();
         else if (sView == View::MESSAGES && sCount) sView = View::DETAIL;
-        else if (sView == View::DETAIL && sCount && sItems[sSelected].voice &&
-                 !sItems[sSelected].mine && !NexusVoice::busy() && !sBusy) {
-            const uint32_t id=sItems[sSelected].id;
-            if (NexusVoice::playReceived(id)) sStatus=NexusVoice::status();
-            else if (NexusVoice::receive(id,ownRole(sRecipient))) {
-                sRequestedVoiceId=id;
-                sRequestedVoiceRecipient=sRecipient;
-                sView=View::STATUS;
-            }
-            else sStatus=NexusVoice::status();
-        }
-        else if (sView == View::VOICE) voiceAction();
         else if (sView == View::CONFIRM) sendDraft();
+        else if (sView == View::WIFI_STATUS) openKvxWifiMenu();
         else if (sView == View::CONTACT) {
             if (sActiveRecipient != sRecipient) {
                 // Do not show Bob's messages under Alice's identity (or vice versa).
@@ -728,28 +702,13 @@ void nexusNeonApp() {
     sDirty = true;
     sPollAt = millis() + kPollMs;
     // Do not reset sBusy: a previously launched HTTPS request may still be running.
-    (void)NexusVoice::storage();
     EscPress = false; SelPress = false; NextPress = false; PrevPress = false;
     UpPress = false; DownPress = false;
     bool exitApp = false;
     while (!exitApp && !returnToMenu && !forceHome) {
         checkReboot();
         acceptReply();
-        if (NexusVoice::poll()) {
-            const bool downloaded=NexusVoice::completedDownload();
-            sStatus=NexusVoice::status();
-            if (downloaded && sRequestedVoiceId==NexusVoice::lastDownloadId() &&
-                sRequestedVoiceRecipient==sRecipient && sView==View::STATUS) {
-                NexusVoice::playReceived(NexusVoice::lastDownloadId());
-                sStatus=NexusVoice::status();
-                sView=View::DETAIL;
-            } else if (sView==View::STATUS)
-                sView=sRequestedVoiceId?View::DETAIL:View::VOICE;
-            sRequestedVoiceId=0;
-            sRequestedVoiceRecipient="";
-            sDirty=true;
-        }
-        if (sView == View::MESSAGES && !sBusy && !NexusVoice::busy() &&
+        if (sView == View::MESSAGES && !sBusy &&
             WiFi.status() == WL_CONNECTED && (int32_t)(millis() - sPollAt) >= 0) {
             beginOperation(Op::FETCH);
             sPollAt = millis() + kPollMs;
@@ -758,8 +717,6 @@ void nexusNeonApp() {
         handleKeys(exitApp);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
-    // Best-effort abort for a voice download on leaving the module.
-    NexusVoice::cancel();
     // Let in-flight HTTPS finish; replies are consumed/dropped by generation on re-entry.
     tft.fillScreen(kvxConfig.bgColor);
 #endif

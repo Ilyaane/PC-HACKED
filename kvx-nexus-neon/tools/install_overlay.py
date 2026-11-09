@@ -39,6 +39,8 @@ def install(kvx: Path, nexus: Path, token: str) -> None:
     dest = kvx / "src/menu/nexus_neon"
     dest.mkdir(parents=True, exist_ok=True)
     for source in OVERLAY.glob("*"):
+        if source.name in {"nexus_voice.cpp", "nexus_voice.h"}:
+            continue  # Text only. Audio implementation omitted at build.
         if source.suffix not in {".h", ".cpp"}:
             continue
         shutil.copyfile(source, dest / source.name)
