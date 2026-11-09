@@ -34,12 +34,12 @@ jobs:
           test -n "$NEXUS_SHARED_TOKEN"
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 \
             -in extracted/KVXputer_NexusV10_MQTTV5.bin.enc \
-            -out delivery/KVX 974_APP.bin \
+            -out "delivery/KVX 974_APP.bin" \
             -pass env:NEXUS_SHARED_TOKEN
           python - <<'PY'
           from hashlib import sha256
           from pathlib import Path
-          p=Path("delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin")
+          p=Path("delivery/KVX 974_APP.bin")
           data=p.read_bytes()
           print("bytes:", len(data), "sha256:", sha256(data).hexdigest())
           assert len(data) <= 6160384, "App exceeds partition size"
