@@ -20,7 +20,7 @@ jobs:
           set -euo pipefail
           curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/Ilyaane/PC-HACKED/actions/artifacts/13474749620/zip" \
+            "https://api.github.com/repos/Ilyaane/PC-HACKED/actions/artifacts/13647438023/zip" \
             -o /tmp/verified-kvx-archive.zip
           unzip -t /tmp/verified-kvx-archive.zip
           mkdir -p extracted delivery
@@ -34,7 +34,7 @@ jobs:
           test -n "$NEXUS_SHARED_TOKEN"
           openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 \
             -in extracted/KVXputer_NexusV10_MQTTV5.bin.enc \
-            -out delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin \
+            -out delivery/KVX 974_APP.bin \
             -pass env:NEXUS_SHARED_TOKEN
           python - <<'PY'
           from hashlib import sha256
@@ -42,13 +42,15 @@ jobs:
           p=Path("delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin")
           data=p.read_bytes()
           print("bytes:", len(data), "sha256:", sha256(data).hexdigest())
-          assert len(data) < 6160384, "App exceeds partition size"
+          assert len(data) <= 6160384, "App exceeds partition size"
           assert data[0] == 0xE9, "Not an ESP32 app image"
+          assert len(data) == 5328320, "Unexpected build size"
+          assert sha256(data).hexdigest() == "9f816bfaf2d02b63aa15a67d4f358ed3a618bc7fe015c6e935ea0eaa112e7d2c", "Unexpected source image"
           PY
       - name: Upload directly flashable app-image BIN
         uses: actions/upload-artifact@v4
         with:
-          name: KVXputer-NexusV10-MQTTV5-ADV-APP-BIN
+          name: KVX-974-ADV-APP-BIN
           path: delivery/KVXputer_NexusV10_MQTTV5_ADV_APP.bin
           if-no-files-found: error
           retention-days: 1
