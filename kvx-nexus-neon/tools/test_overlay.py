@@ -75,7 +75,7 @@ class InstallTests(unittest.TestCase):
         self.assertNotIn("MQTT", code)
         self.assertNotIn("prefs.putString(\"token\"", text)
         self.assertIn("key.fn && key.exit_key", text)
-        self.assertIn("NEXUS NEON V10", text)
+        self.assertIn("NEXUS V10 / 10NOV", text)
         self.assertNotIn("NexusVoice::", text)
         self.assertNotIn("nexus_voice.h", text)
         self.assertIn("View::WIFI_STATUS", text)
