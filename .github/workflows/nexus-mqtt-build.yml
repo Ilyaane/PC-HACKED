@@ -4,6 +4,7 @@ on:
     branches:
       - nexus-mqtt-standalone-20261103
       - mqtt-historique-lecture-20261110
+      - mqtt-display-ux-fix-20261110
     paths:
       - 'nexus-mqtt/**'
       - '.github/workflows/nexus-mqtt-build.yml'
