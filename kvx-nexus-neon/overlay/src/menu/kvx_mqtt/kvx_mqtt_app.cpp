@@ -290,7 +290,7 @@ void startSettings(){
   settingsIdx=configIsValid()?2:0;
   editBuf=strValue(settingKey(settingsIdx));
   settingsTextOffset=0;
-  statusText="ENTREE : modifier, fleches : champs";lastDraw=0;
+  statusText="Taper directement, ENTREE pour sauvegarder";lastDraw=0;
 }
 void finishSetting(){
   // Save the selected field directly, preserving the original settings
@@ -445,38 +445,40 @@ void keyPress(){
   if(esc || (k.pressed && k.exit_key)) { onKey(96, char(96), false, false); return; }
   bool up=check(UpPress), down=check(DownPress), left=check(PrevPress), right=check(NextPress);
   if(currentPage==Page::Settings) {
-    // The standalone M5Cardputer inline editor cannot be driven reliably by
-    // KVXputer's KeyStroke + global shortcut flags. Never append k.word here.
-    if(k.pressed && k.fn && (left || right)) {
-      // The field is entirely visible in plaintext by scrolling 35 chars.
+    // Native compact inline editor: no oversized full-screen keyboard dialog,
+    // no loss of Wi-Fi/MQTT values when entering an individual field.
+    // Physical arrows select fields, Fn+arrows scroll long values, Enter saves.
+    if(k.pressed && k.fn && k.del){
+      editBuf="";settingsTextOffset=0;
+      setStatus("Champ vide, saisissez la nouvelle valeur");lastDraw=0;
+    }else if(k.pressed && k.fn && (left || right)){
       if(left)settingsTextOffset=settingsTextOffset>=35?settingsTextOffset-35:0;
       if(right)settingsTextOffset=std::min(editBuf.length(),settingsTextOffset+35);
       lastDraw=0;
     }else if(up || left){
-      if(settingsIdx>0) --settingsIdx;
+      if(settingsIdx>0)--settingsIdx;
       editBuf=strValue(settingKey(settingsIdx));
       settingsTextOffset=0;lastDraw=0;
     }else if(down || right){
-      if(settingsIdx+1<SETTINGS_COUNT) ++settingsIdx;
+      if(settingsIdx+1<SETTINGS_COUNT)++settingsIdx;
       editBuf=strValue(settingKey(settingsIdx));
       settingsTextOffset=0;lastDraw=0;
     }else if(check(SelPress) || (k.pressed && k.enter)){
-      String prompt=String("MQTT ")+String(settingsIdx+1)+"/8 "+settingNames[settingsIdx];
-      // Explicit local-only visibility: show passwords as actual characters.
-      String typed=keyboard(editBuf,110,prompt,false);
-      // Clear residual confirmation keystrokes before re-entering the form.
-      SelPress=false;
-      if(typed!=String("\x1B")){
-        editBuf=typed;
-        settingsTextOffset=0;
-        finishSetting();
-      }else{
-        setStatus("Modification annulee : ancienne valeur conservee");
+      finishSetting();
+      lastDraw=0;
+    }else if(k.pressed && k.del){
+      if(editBuf.length())editBuf.remove(editBuf.length()-1);
+      settingsTextOffset=editBuf.length()>70?editBuf.length()-70:0;
+      lastDraw=0;
+    }else if(k.pressed && !k.fn){
+      for(char ch:k.word){
+        if((unsigned char)ch>=32 && (unsigned char)ch<=126 &&
+           editBuf.length()<110) editBuf+=ch;
       }
+      settingsTextOffset=editBuf.length()>70?editBuf.length()-70:0;
       lastDraw=0;
     }
-    // Do not interpret any second character event for the same physical key.
-    return;
+    return; // One physical key event must not enter another screen.
   }
   if (up) onKey(';',';',false,false);
   if (down) onKey('.','.',false,false);
@@ -630,7 +632,10 @@ void drawNetwork(){
   drawText("MQTT",11,51,C_CYAN,C_PANEL);
   drawText(netMqttUp.load()?"Connecte":"Non connecte",105,51,netMqttUp.load()?C_GREEN:C_ORANGE,C_PANEL);
   drawText("microSD",11,66,C_CYAN,C_PANEL);
-  drawText(sdOK?"OK":"Absente",105,66,sdOK?C_GREEN:C_RED,C_PANEL);
+  drawText(sdOK?"OK":"Absente",62,66,sdOK?C_GREEN:C_RED,C_PANEL);
+  const size_t largestHeap=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+  drawText("Bloc RAM",116,66,C_CYAN,C_PANEL);
+  drawText(String(largestHeap/1024)+" Ko",181,66,largestHeap>=16384?C_GREEN:C_ORANGE,C_PANEL);
   drawText("IP",11,81,C_CYAN,C_PANEL);
   drawText(netWifiUp.load()?trimText(netIp,21):"--",55,81,C_WHITE,C_PANEL);
   drawText(trimText(statusText,34),11,101,C_MUTED,C_PANEL);
@@ -648,7 +653,7 @@ void drawSettings(){
   drawText(editBuf.substring(start,start+35),10,73,C_WHITE,C_PANEL);
   drawText(editBuf.substring(start+35,start+70),10,88,C_WHITE,C_PANEL);
   drawText(trimText(statusText,38),7,109,C_MUTED);
-  drawFooter("ENTREE editer  FLECHES champs  FN+< > defiler");
+  drawFooter("ENTREE sauver | FN+DEL vider | ESC retour");
 }
 void drawConnectionDots(){
   auto &d=tft;
@@ -665,14 +670,14 @@ void drawUi(){
   if(newPage){
     d.fillScreen(C_BG);
     switch(currentPage){
-      case Page::Home:drawTopBar("NEXUS MQTT");break;
+      case Page::Home:drawTopBar("MQTT KVX / 10NOV");break;
       case Page::Chat:drawTopBar("MESSAGES");break;
       case Page::History:drawTopBar("HISTORIQUE");break;
       case Page::Detail:drawTopBar("LIRE MESSAGE");break;
       case Page::Network:drawTopBar("ETAT RESEAU");break;
       case Page::Settings:drawTopBar("REGLAGES");break;
     }
-  }else if(currentPage!=Page::Home && currentPage!=Page::Network){
+  }else if(currentPage!=Page::Home){
     // Small-area clear, never blank the entire display on text/status updates.
     d.fillRect(0,23,240,99,C_BG);
   }
@@ -769,6 +774,8 @@ void networkTask(void*){
                       err==-3?"MQTT TCP/TLS: hote, port, CA":
                       String("MQTT e=")+String(err)+" rc="+String(rc);
           notifyUi(diag.c_str());
+          // Reclaim TLS buffers after a failed handshake before the next retry.
+          mqtt.disconnect();tls.stop();
         }
       }
       vTaskDelay(pdMS_TO_TICKS(50));continue;
@@ -833,7 +840,7 @@ void appStart(){
   // Single KVX setup(), Wi-Fi service, display, keyboard and SD mount.
   cleanupQueues();
   currentPage=Page::Home;selectedTile=0;selectedHistory=0;scrollPos=0;
-  recent.clear();draft="";txWaiting=false;statusText="Initialisation...";
+  recent.clear();txWaiting=false;statusText="Initialisation..."; // Keep unsent draft on reentry.
   uiInitialized=false;lastDraw=0;lastPhysicalKeyMask=0;
   // KVX mounts microSD lazily; without this call config.ini and ca.pem
   // silently fail even when the card is inserted.
