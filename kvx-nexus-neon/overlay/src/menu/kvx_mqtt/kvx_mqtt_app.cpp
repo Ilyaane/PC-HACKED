@@ -417,7 +417,7 @@ void keyPress(){
       if(settingsIdx+1<SETTINGS_COUNT) ++settingsIdx;
       editBuf=strValue(settingKey(settingsIdx));lastDraw=0;
     }else if(check(SelPress) || (k.pressed && k.enter)){
-      String prompt=String("MQTT ")+String(settingsIdx+1)+"/8 ")+settingNames[settingsIdx];
+      String prompt=String("MQTT ")+String(settingsIdx+1)+"/8 "+settingNames[settingsIdx];
       String typed=keyboard(editBuf,110,prompt,false);
       if(typed!=String("\x1B")){
         editBuf=typed;
