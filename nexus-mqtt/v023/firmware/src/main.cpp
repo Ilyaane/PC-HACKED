@@ -35,6 +35,11 @@ WiFiClientSecure tls;
 MQTTClient mqtt(768,768); // Owned by networkTask, never touched by UI thread.
 String caPem, draft, statusText="Initialisation...", editBuf;
 std::vector<Message> recent;
+// Archived messages are loaded in bounded pages, never all into ESP32 RAM.
+std::vector<Message> archivePage;
+bool browsingArchive=false;
+size_t archiveSkipNewest=0;
+const std::vector<Message>& visibleHistory(){return browsingArchive?archivePage:recent;}
 bool sdOK=false, inSettings=false, configured=false;
 enum class Page : uint8_t { Home, Chat, History, Detail, Network, Settings };
 Page currentPage=Page::Home;
@@ -167,23 +172,61 @@ void logHistory(const Message &m){
   doc["text"]=m.text;doc["ts"]=m.timestamp;
   serializeJson(doc,f);f.println();f.close();
 }
-void loadHistory(){
-  if(!sdOK)return;
-  File f=SD.open(HISTORY_FILE,FILE_READ);if(!f)return;
-  if(f.size()>16384){
-    f.seek(f.size()-16384);
-    f.readStringUntil('\n'); // skip truncated first record
-  }
+// Parse a local JSONL record; invalid lines are skipped, not deleted.
+bool parseHistoryRecord(const String &line, Message &m){
+  if(line.length()==0||line.length()>600)return false;
+  JsonDocument d;if(deserializeJson(d,line))return false;
+  m.id=d["id"].as<String>();
+  m.from=d["from"].as<String>();
+  m.text=d["text"].as<String>();
+  m.timestamp=d["ts"]|0u;
+  return m.id.length()>0 && m.text.length()>0 && m.text.length()<=MAX_TEXT;
+}
+size_t countHistoryRecords(const char *path){
+  File f=SD.open(path,FILE_READ);if(!f)return 0;
+  size_t count=0;
   while(f.available()){
-    String line=f.readStringUntil('\n');
-    if(line.length()>600)continue;
-    JsonDocument d;if(deserializeJson(d,line))continue;
     Message m;
-    m.id=d["id"].as<String>();m.from=d["from"].as<String>();
-    m.text=d["text"].as<String>();m.timestamp=d["ts"]|0u;
-    if(m.id.length() && m.text.length()<=MAX_TEXT)keepRecent(m);
+    if(parseHistoryRecord(f.readStringUntil('\n'),m))++count;
+  }
+  f.close();return count;
+}
+void appendHistoryWindow(const char *path, size_t begin, size_t end, size_t &index){
+  File f=SD.open(path,FILE_READ);if(!f)return;
+  while(f.available() && index<end){
+    Message m;
+    if(!parseHistoryRecord(f.readStringUntil('\n'),m))continue;
+    if(index>=begin)archivePage.push_back(m);
+    ++index;
   }
   f.close();
+}
+// Old rotated file is read first. Both files remain untouched.
+void loadHistory(){
+  if(!sdOK)return;
+  recent.clear();
+  const char *paths[]={"/mqtt/history.old.jsonl", HISTORY_FILE};
+  for(const char *path:paths){
+    File f=SD.open(path,FILE_READ);if(!f)continue;
+    while(f.available()){
+      Message m;
+      if(parseHistoryRecord(f.readStringUntil('\n'),m))keepRecent(m);
+    }
+    f.close();
+  }
+}
+bool loadArchivePage(size_t skipNewest){
+  if(!sdOK)return false;
+  const size_t total=countHistoryRecords("/mqtt/history.old.jsonl")+
+                     countHistoryRecords(HISTORY_FILE);
+  if(total<=skipNewest)return false;
+  const size_t end=total-skipNewest;
+  const size_t start=end>35?end-35:0;
+  archivePage.clear();archivePage.reserve(35);
+  size_t index=0;
+  appendHistoryWindow("/mqtt/history.old.jsonl",start,end,index);
+  if(index<end)appendHistoryWindow(HISTORY_FILE,start,end,index);
+  return !archivePage.empty();
 }
 bool queueOutbox(const String &text){
   if(!sdOK||text.isEmpty()||text.length()>MAX_TEXT)return false;
@@ -270,15 +313,39 @@ void finishSetting(){
   lastDraw=0;
 }
 void navigateHistory(int delta){
-  if(recent.empty())return;
+  const std::vector<Message> &items=visibleHistory();
+  if(items.empty())return;
+  if(delta<0 && selectedHistory<=0){
+    const size_t skip=browsingArchive?archiveSkipNewest+archivePage.size():recent.size();
+    if(loadArchivePage(skip)){
+      browsingArchive=true;archiveSkipNewest=skip;
+      selectedHistory=(int)archivePage.size()-1;
+      lastDraw=0;
+    }
+    return;
+  }
+  if(delta>0 && selectedHistory>=(int)items.size()-1){
+    if(browsingArchive){
+      const size_t newerSkip=archiveSkipNewest>35?archiveSkipNewest-35:0;
+      if(newerSkip<recent.size()){
+        browsingArchive=false;archivePage.clear();
+        selectedHistory=0;
+      }else if(loadArchivePage(newerSkip)){
+        archiveSkipNewest=newerSkip;
+        selectedHistory=0;
+      }
+      lastDraw=0;
+    }
+    return;
+  }
   selectedHistory+=delta;
   if(selectedHistory<0)selectedHistory=0;
-  if(selectedHistory>=(int)recent.size())selectedHistory=recent.size()-1;
-  scrollPos=(int)recent.size()-1-selectedHistory;
+  if(selectedHistory>=(int)items.size())selectedHistory=(int)items.size()-1;
+  scrollPos=(int)items.size()-1-selectedHistory;
 }
 void openTile(){
   if(selectedTile==0)currentPage=Page::Chat;
-  if(selectedTile==1){currentPage=Page::History;selectedHistory=recent.empty()?0:recent.size()-1;scrollPos=0;}
+  if(selectedTile==1){browsingArchive=false;archivePage.clear();currentPage=Page::History;selectedHistory=recent.empty()?0:recent.size()-1;scrollPos=0;}
   if(selectedTile==2)currentPage=Page::Network;
   if(selectedTile==3)startSettings();
   lastDraw=0;
@@ -335,7 +402,7 @@ void onKey(uint8_t code,char typed,bool fn,bool shift){
     if(back){currentPage=Page::Home;scrollPos=0;changed=true;}
     else if(directArrow){if(code==';'||code==',')navigateHistory(-1);
                              else navigateHistory(1);}
-    else if(enter&&!recent.empty()){currentPage=Page::Detail;changed=true;}
+    else if(enter&&!visibleHistory().empty()){currentPage=Page::Detail;changed=true;}
   }else if(currentPage==Page::Detail){
     if(back||enter){currentPage=Page::History;changed=true;}
   }else if(currentPage==Page::Network){
@@ -464,14 +531,15 @@ void drawChat(){
 }
 void drawHistory(){
   auto &d=M5Cardputer.Display;
-  if(recent.empty())drawText("Aucun message enregistre",8,57,C_MUTED);
+  const auto &messages=visibleHistory();
+  if(messages.empty())drawText("Aucun message enregistre",8,57,C_MUTED);
   else{
     int start=selectedHistory-1;
     if(start<0)start=0;
-    if(start+3>(int)recent.size())start=recent.size()>3?recent.size()-3:0;
+    if(start+3>(int)messages.size())start=messages.size()>3?messages.size()-3:0;
     for(int r=0;r<3;r++){
-      int idx=start+r;if(idx>=(int)recent.size())break;
-      const Message &m=recent[idx];int y=27+r*31;
+      int idx=start+r;if(idx>=(int)messages.size())break;
+      const Message &m=messages[idx];int y=27+r*31;
       uint16_t bg=idx==selectedHistory?C_PANEL:C_BAR;
       uint16_t accent=m.from==cfg.id?C_CYAN:C_PURPLE;
       d.fillRoundRect(5,y,230,27,5,bg);
@@ -480,12 +548,13 @@ void drawHistory(){
       drawText(trimText(m.text,34),10,y+15,C_WHITE,bg);
     }
   }
-  drawFooter("FLECHES lire | ENTER ouvrir | ` menu");
+  drawFooter(browsingArchive?"ARCHIVE  Fleches | ENTER lire":"FLECHES lire | ENTER ouvrir");
 }
 void drawDetail(){
   auto &d=M5Cardputer.Display;
-  if(selectedHistory<0||selectedHistory>=(int)recent.size())return;
-  const Message &m=recent[selectedHistory];
+  const auto &messages=visibleHistory();
+  if(selectedHistory<0||selectedHistory>=(int)messages.size())return;
+  const Message &m=messages[selectedHistory];
   drawText(m.from==cfg.id?"MESSAGE ENVOYE":"MESSAGE RECU",8,29,C_CYAN);
   int pos=0;
   for(int row=0;row<6&&pos<(int)m.text.length();row++){
