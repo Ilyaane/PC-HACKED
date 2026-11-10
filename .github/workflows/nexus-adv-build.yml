@@ -2,7 +2,7 @@ name: NEXUS Cardputer ADV - compile and test
 on:
   workflow_dispatch:
   push:
-    branches: [nexus-adv-build]
+    branches: [nexus-adv-build, nexus-neon-stabilisation-20261110]
     paths: ['nexus-adv/**', '.github/workflows/nexus-adv-build.yml']
   pull_request:
     paths: ['nexus-adv/**', '.github/workflows/nexus-adv-build.yml']
