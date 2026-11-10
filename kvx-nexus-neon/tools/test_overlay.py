@@ -131,7 +131,7 @@ class InstallTests(unittest.TestCase):
         self.assertIn('if(f.size()>8192){f.close();return false;}', code)
         self.assertIn('cfg.port>0 && validNode(cfg.id)', code)
         self.assertIn('cfg.port=(p>0&&p<65536)?(uint16_t)p:0;', code)
-        self.assertIn('if(typed!=String("\\x1B"))', code)
+        self.assertIn('if(k.pressed && k.fn && k.del)', code)  # Fn+Del clears inline field
         self.assertIn('currentPage=Page::Settings;', code)
         # Editing is a transaction: ESC reverts and existing drafts survive reconnect.
         self.assertIn("beforeSettings=cfg;", code)
