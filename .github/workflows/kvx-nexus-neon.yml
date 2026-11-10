@@ -7,6 +7,7 @@ on:
       - kvx-nexus-v10-mqtt-v5-20261104
       - kvx-nexus-mqtt-fixes-fonts-20261105
       - kvx-974-reprise-rebuild-20261110
+      - kvx-974-ux-diagnostics-20261110
       - kvx-core-ble-suite-nexus-wifi-20261105
       - kvx-core-stabilisation-rebuild-20261105
     paths:
