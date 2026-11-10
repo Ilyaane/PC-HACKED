@@ -7,6 +7,11 @@ ini=(root/'firmware/platformio.ini').read_text()
 worker=(root/'cloudflare/src/index.mjs').read_text()
 checks={
  'ADV-only target': 'board = m5stack-stamps3' in ini,
+ 'Display dimensions checked': 'display.width()==240 && display.height()==135' in cpp,
+ 'Display flips 180 deg': 'const uint8_t next=(activeDisplayRotation+2)&3;' in cpp,
+ 'Rotation stored in NVS': 'prefs.putUChar("rot",next)' in cpp,
+ 'Orientation keyboard shortcut': 'if(lastChord=="FN+O")return;' in cpp,
+ 'Force full repaint after flip': 'fullRepaint=fullRepaint || firstFrame || lastView!=view;' in cpp and 'fullRepaint=false;' in cpp,
  'Correct 8MB flash': 'board_build.flash_size = 8MB' in ini,
  'Correct 8MB partition scheme': 'board_build.partitions = default_8MB.csv' in ini,
  'App capacity enforced': 'board_upload.maximum_size = 3342336' in ini,
@@ -74,7 +79,7 @@ checks={
  'Wait for HTTPS before recording': 'voiceRecordQueued=true' in cpp and 'if(voiceRecordQueued && !netWorkerBusy' in cpp,
  'No background polling in voice menu': 'view==View::SECTION && homeIndex==1' in cpp,
  'Partial frame redraw': 'idx!=selected && idx!=lastSelected' in cpp and 'if(newPage)menuFrame(title);' in cpp,
- 'Release identifies this build': 'NEXUS NEON MORSE V2 BETA' in cpp,
+ 'Release identifies this build': 'NEON ADV / correction affichage' in cpp,
  'Voice error diagnostic': 'case View::VOICE_ERROR:' in cpp and 'Micro ES8311 non initialise' in cpp,
  'Voice draft selection': 'case View::VOICE_READY:' in cpp and 'recordVoice(true)' in cpp,
  'Voice key persisted before sending': 'prefs.getString("vocid","")!=pendingVoiceId' in cpp,
