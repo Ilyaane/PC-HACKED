@@ -298,6 +298,7 @@ void finishSetting(){
   editBuf.replace("\n","");editBuf.replace("\r","");
   const String key=settingKey(settingsIdx);
   const Config staged=cfg;
+  const bool wasValid=configIsValid();
   if(settingsIdx==3){
     bool onlyDigits=!editBuf.isEmpty();
     for(size_t i=0;i<editBuf.length();++i){
@@ -313,12 +314,7 @@ void finishSetting(){
   if(!configIsValid()){
     // On first installation, collect remaining values without saving partial
     // credentials. On an already configured device, roll back bad entries.
-    if(!configIsValid() && !staged.host.length() && settingsIdx+1<SETTINGS_COUNT){
-      ++settingsIdx;
-      editBuf=strValue(settingKey(settingsIdx));
-      statusText="Completer les champs MQTT";
-    }else if(!configIsValid() && !beforeSettings.host.length() &&
-             settingsIdx+1<SETTINGS_COUNT){
+    if(!wasValid && settingsIdx+1<SETTINGS_COUNT){
       ++settingsIdx;
       editBuf=strValue(settingKey(settingsIdx));
       statusText="Completer les champs MQTT";
