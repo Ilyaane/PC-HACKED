@@ -6,6 +6,7 @@ on:
       - kvx-plus-audit-stabilite-20261104
       - kvx-nexus-v10-mqtt-v5-20261104
       - kvx-nexus-mqtt-fixes-fonts-20261105
+      - kvx-mqtt-edition-corrective-20261110
     paths:
       - 'kvx-nexus-neon/**'
       - '.github/workflows/kvx-nexus-neon.yml'
