@@ -578,6 +578,7 @@ bool serverTest(){
 void beginWifiAsync(const String& ssid,const String& pass,bool boot){
   if(ssid.isEmpty())return;
   if(wifiScanPending){wifiScanPending=false;WiFi.scanDelete();}
+  WiFi.setAutoReconnect(true);  // Association may resume after a cancelled scan.
   wifiPreviousSsid=prefsReady?prefs.getString("ssid",""):wifiSsid;
   wifiPreviousPass=prefsReady?prefs.getString("pwd",""):wifiPass;
   wifiAttemptSsid=ssid;wifiAttemptPass=pass;
@@ -635,12 +636,17 @@ void scanWifi(){
   scanCount=0;scanPage=0;wifiIndex=0;
   changeView(View::WIFI_LIST);
   setStatus("Recherche Wi-Fi...");paint();
+  // The station can scan without deleting any SSID/password from NVS.
+  // Suspend background auto-reassociation while the scan uses the radio.
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(false);
   // Asynchronous scan: never wait for scan results in the keyboard/UI call.
   WiFi.scanDelete();
   wifiScanPending=true;wifiScanStartedAt=millis();
   int started=WiFi.scanNetworks(true,true);
   if(started==WIFI_SCAN_FAILED){
     wifiScanPending=false;
+    WiFi.setAutoReconnect(true);
     setStatus("Scan indisponible, reessayer");paint();
   }
 }
@@ -650,19 +656,22 @@ void serviceWifiScan(){
   if(n==WIFI_SCAN_RUNNING){
     if(millis()-wifiScanStartedAt>12000){
       wifiScanPending=false;WiFi.scanDelete();
+      WiFi.setAutoReconnect(true);
       setStatus("Scan expire: reessayer");paint();
     }
     return;
   }
   wifiScanPending=false;
-  if(n<0){WiFi.scanDelete();setStatus("Scan echoue: reessayer");paint();return;}
+  if(n<0){WiFi.scanDelete();WiFi.setAutoReconnect(true);setStatus("Scan echoue: reessayer");paint();return;}
   for(int i=0;i<n && scanCount<24;i++){
     String name=WiFi.SSID(i);if(name.isEmpty())continue;
     bool duplicate=false;for(int j=0;j<scanCount;j++)if(scanNames[j]==name)duplicate=true;
     if(!duplicate){scanNames[scanCount]=name;scanSaved[scanCount]=wifiSlot(name)>=0;
       scanOpen[scanCount]=(WiFi.encryptionType(i)==WIFI_AUTH_OPEN);scanCount++;}
   }
-  WiFi.scanDelete();setStatus(scanCount?"Fleches : selection / Entree : OK":"Aucun reseau trouve");paint();
+  WiFi.scanDelete();
+  WiFi.setAutoReconnect(true);
+  setStatus(scanCount?"Fleches : selection / Entree : OK":"Aucun reseau trouve");paint();
 }
 void wifiSetup(){
   if(wifiSsid.isEmpty())scanWifi();else{confirmIndex=0;changeView(View::WIFI_CONFIRM);}
