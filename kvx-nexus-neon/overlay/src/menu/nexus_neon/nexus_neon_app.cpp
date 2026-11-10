@@ -383,7 +383,7 @@ void drawHome() {
     tft.setTextColor(0x0000,a);
     tft.drawString("N",10,6,1);
     tft.setTextColor(0xFFFF,0x080F);
-    tft.drawString("NEXUS NEON V10",28,7,1);
+    tft.drawString("NEXUS V10 / 10NOV",28,7,1);
     tft.fillRect(0,20,tftWidth,2,a);
     const int x=tftWidth/2, y=62;
     tft.fillRoundRect(x-82,26,164,76,11,d);
@@ -500,9 +500,14 @@ void drawStatus() {
     tft.drawString(cut(sStatus,36),8,37,1);
     tft.setTextColor(kNeonCyan,kDark);
     tft.drawString(WiFi.status()==WL_CONNECTED?"Wi-Fi: connecte":"Wi-Fi: absent",8,58,1);
-    tft.drawString("HTTPS: URL, DNS, CA, heure",8,73,1);
+    const size_t freeBlock=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    tft.drawString("RAM libre contigue : "+String(freeBlock/1024)+" Ko",8,73,1);
+    if(freeBlock<16384){
+        tft.setTextColor(kNeonGreen,kDark);
+        tft.drawString("Fermer les modules actifs",8,85,1);
+    }
     tft.setTextColor(kNeonGreen,kDark);
-    tft.drawString("ENTREE: retour   ESC: accueil",8,94,1);
+    tft.drawString("ENTREE retour | ESC accueil",8,108,1);
 }
 void drawWifiStatus() {
     paintFrame("RESEAU KVX PARTAGE");
