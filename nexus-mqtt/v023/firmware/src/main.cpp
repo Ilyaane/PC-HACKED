@@ -1,7 +1,6 @@
 // NEXUS MQTT 0.2.3 - Physical arrow keys, stable partial UI, background TLS/MQTT; Wi-Fi no NVS.
 // Text-only first milestone. No LoRa radio, no audio, no external credentials built in.
 #include <M5Cardputer.h>
-#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <MQTT.h>
@@ -65,8 +64,6 @@ String netIp="--";
 uint32_t lastSendAttempt=0,lastDraw=0;
 uint64_t lastPhysicalKeyMask=0;
 Page lastRenderedPage=Page::Home;
-Preferences orientationPrefs;
-bool orientationPrefsOpen=false;
 uint8_t activeDisplayRotation=1;
 bool uiInitialized=false;
 int scrollPos=0;
@@ -367,9 +364,15 @@ static bool useLandscapeRotation(uint8_t rotation){
   return display.width()==240 && display.height()==135;
 }
 void configureDisplayOrientation(){
-  orientationPrefsOpen=orientationPrefs.begin("mqttscreen",false);
-  uint8_t requested=orientationPrefsOpen?orientationPrefs.getUChar("rot",1):1;
-  requested &= 3;
+  uint8_t requested=1;
+  if(sdOK){
+    File f=SD.open("/mqtt/display.cfg",FILE_READ);
+    if(f){
+      const int val=f.read();
+      if(val>='0' && val<='3')requested=(uint8_t)(val-'0');
+      f.close();
+    }
+  }
   const uint8_t candidates[]={requested,1,3,0,2};
   bool valid=false;
   for(uint8_t rotation:candidates){
@@ -393,7 +396,20 @@ void flipDisplayOrientation(){
     return;
   }
   activeDisplayRotation=next;
-  if(orientationPrefsOpen)orientationPrefs.putUChar("rot",activeDisplayRotation);
+  if(sdOK){
+    // Save screen preference separately from Wi-Fi / MQTT credentials.
+    File f=SD.open("/mqtt/display.tmp",FILE_WRITE);
+    bool saved=false;
+    if(f){
+      saved=(f.print(String(activeDisplayRotation))==1);
+      f.flush();f.close();
+    }
+    if(saved){
+      SD.remove("/mqtt/display.cfg");
+      saved=SD.rename("/mqtt/display.tmp","/mqtt/display.cfg");
+    }
+    if(!saved)setStatus("Sens ecran actif; sauvegarde microSD impossible");
+  }
   uiInitialized=false;
   lastDraw=0;
   Serial.printf("MQTT display flipped: rotation=%u\\n",unsigned(activeDisplayRotation));
@@ -798,7 +814,6 @@ void serviceNetworkEvents(){
 void setup(){
   Serial.begin(115200);
   M5Cardputer.begin();
-  configureDisplayOrientation();
   // Important: never let Arduino's Wi-Fi library persist station credentials.
   // Both Wi-Fi and MQTT credentials are loaded exclusively from microSD.
   // Call before WiFi.mode()/WiFi.begin() and before any reconnection attempt.
@@ -818,6 +833,7 @@ void setup(){
     configured=loadConfig();caPem=readCA();
     loadHistory();
   }
+  configureDisplayOrientation();
   if(!sdOK)setStatus("microSD absente. Insertion requise");
   else if(!configured){startSettings();setStatus("Configurer MQTT (TAB/F1)");}
   else if(!caPem.length())setStatus("Installer /mqtt/ca.pem sur microSD");
