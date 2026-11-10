@@ -293,30 +293,55 @@ void startSettings(){
   statusText="ENTREE : modifier, fleches : champs";lastDraw=0;
 }
 void finishSetting(){
+  // Save the selected field directly, preserving the original settings
+  // transaction and the previously usable configuration on any failure.
   editBuf.replace("\n","");editBuf.replace("\r","");
-  setValue(settingKey(settingsIdx),editBuf);
-  if(settingsIdx+1<SETTINGS_COUNT){
-    settingsIdx++;editBuf=strValue(settingKey(settingsIdx));
-    statusText="Champ valide, continuer la configuration";
-  }
-  else{
-    if(saveConfig()){
-      beforeSettings=cfg; // Committed only after an actual microSD save.
-      // Reconfigure the native task, never reboot the whole KVX firmware.
-      pendingReconfigure=true;
-      stopWorker.store(true);
-      inSettings=false;currentPage=Page::Network;
-      setStatus("Configuration sauvee; reconnexion...");
-    } else {
-      // Don't send the user back to field 1 or erase what was typed.
-      if(!sdOK) setStatus("microSD non montee : configuration non sauvee");
-      else if(!configIsValid()) setStatus("MQTT: hote, compte ou a/b invalide");
-      else setStatus("Ecriture /mqtt/config.ini echouee");
-      // Stay at the last field: UP/DOWN navigates to the one to fix.
-      currentPage=Page::Settings;
+  const String key=settingKey(settingsIdx);
+  const Config staged=cfg;
+  if(settingsIdx==3){
+    bool onlyDigits=!editBuf.isEmpty();
+    for(size_t i=0;i<editBuf.length();++i){
+      if(editBuf[i]<'0'||editBuf[i]>'9')onlyDigits=false;
+    }
+    const long port=editBuf.toInt();
+    if(!onlyDigits||port<1||port>65535){
+      setStatus("Port TLS invalide (1-65535)");
+      editBuf=strValue(key);lastDraw=0;return;
     }
   }
-  lastDraw=0;
+  setValue(key,editBuf);
+  if(!configIsValid()){
+    // On first installation, collect remaining values without saving partial
+    // credentials. On an already configured device, roll back bad entries.
+    if(!configIsValid() && !staged.host.length() && settingsIdx+1<SETTINGS_COUNT){
+      ++settingsIdx;
+      editBuf=strValue(settingKey(settingsIdx));
+      statusText="Completer les champs MQTT";
+    }else if(!configIsValid() && !beforeSettings.host.length() &&
+             settingsIdx+1<SETTINGS_COUNT){
+      ++settingsIdx;
+      editBuf=strValue(settingKey(settingsIdx));
+      statusText="Completer les champs MQTT";
+    }else{
+      cfg=staged;
+      editBuf=strValue(key);
+      setStatus("MQTT: hote, compte ou a/b invalide");
+    }
+    settingsTextOffset=0;lastDraw=0;return;
+  }
+  if(!saveConfig()){
+    cfg=beforeSettings; // Existing saved credentials remain authoritative.
+    editBuf=strValue(key);
+    setStatus("Sauvegarde microSD echouee; ancienne config conservee");
+    settingsTextOffset=0;lastDraw=0;return;
+  }
+  beforeSettings=cfg;
+  pendingReconfigure=true;
+  stopWorker.store(true);
+  inSettings=false;
+  currentPage=Page::Network;
+  setStatus("Champ sauve; reconnexion MQTT...");
+  settingsTextOffset=0;lastDraw=0;
 }
 void navigateHistory(int delta){
   if(recent.empty())return;
@@ -440,7 +465,7 @@ void keyPress(){
       editBuf=strValue(settingKey(settingsIdx));
       settingsTextOffset=0;lastDraw=0;
     }else if(check(SelPress) || (k.pressed && k.enter)){
-      String prompt=String("MQTT ")+String(settingsIdx+1)+"/8: "+settingNames[settingsIdx];
+      String prompt=String("MQTT ")+String(settingsIdx+1)+"/8 "+settingNames[settingsIdx];
       // Explicit local-only visibility: show passwords as actual characters.
       String typed=keyboard(editBuf,110,prompt,false);
       // Clear residual confirmation keystrokes before re-entering the form.
