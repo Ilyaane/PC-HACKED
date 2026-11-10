@@ -40,7 +40,7 @@ class FirmwareV023(unittest.TestCase):
     self.assertIn('if(currentPage==Page::Network)lastDraw=0;',C)
     self.assertIn('if(uiInitialized)drawConnectionDots();',C)
     self.assertIn('const bool newPage=!uiInitialized || lastRenderedPage!=currentPage;',C)
-    self.assertIn('else if(currentPage!=Page::Home && currentPage!=Page::Network)',C)
+    self.assertIn('else if(currentPage!=Page::Home)',C)
     self.assertNotIn('millis()-lastDraw>1500',C)
 
   def test_network_error_visible(self):
