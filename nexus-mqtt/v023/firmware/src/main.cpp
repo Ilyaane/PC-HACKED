@@ -1,6 +1,7 @@
 // NEXUS MQTT 0.2.3 - Physical arrow keys, stable partial UI, background TLS/MQTT; Wi-Fi no NVS.
 // Text-only first milestone. No LoRa radio, no audio, no external credentials built in.
 #include <M5Cardputer.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <MQTT.h>
@@ -64,6 +65,9 @@ String netIp="--";
 uint32_t lastSendAttempt=0,lastDraw=0;
 uint64_t lastPhysicalKeyMask=0;
 Page lastRenderedPage=Page::Home;
+Preferences orientationPrefs;
+bool orientationPrefsOpen=false;
+uint8_t activeDisplayRotation=1;
 bool uiInitialized=false;
 int scrollPos=0;
 
@@ -355,7 +359,47 @@ void openTile(){
 // Keys painted with arrows are ; (UP), , (LEFT), . (DOWN), / (RIGHT).
 // On menus they navigate directly, without Fn. In text input the punctuation
 // stays available, and Shift + punctuation remains available in all modes.
+// The UI uses fixed 240x135 coordinates. A firmware build that returns
+// 135x240 needs a corrected display rotation before drawing anything.
+static bool useLandscapeRotation(uint8_t rotation){
+  auto& display=M5Cardputer.Display;
+  display.setRotation(rotation & 3);
+  return display.width()==240 && display.height()==135;
+}
+void configureDisplayOrientation(){
+  orientationPrefsOpen=orientationPrefs.begin("mqttscreen",false);
+  uint8_t requested=orientationPrefsOpen?orientationPrefs.getUChar("rot",1):1;
+  requested &= 3;
+  const uint8_t candidates[]={requested,1,3,0,2};
+  bool valid=false;
+  for(uint8_t rotation:candidates){
+    if(useLandscapeRotation(rotation)){
+      activeDisplayRotation=rotation;valid=true;break;
+    }
+  }
+  if(!valid){
+    M5Cardputer.Display.setRotation(1);
+    Serial.println("DISPLAY ERROR: no 240x135 rotation available");
+  }
+  Serial.printf("MQTT display: rotation=%u size=%d x %d\\n",
+    unsigned(activeDisplayRotation),int(M5Cardputer.Display.width()),
+    int(M5Cardputer.Display.height()));
+}
+void flipDisplayOrientation(){
+  const uint8_t next=(activeDisplayRotation+2)&3;
+  if(!useLandscapeRotation(next)){
+    useLandscapeRotation(activeDisplayRotation);
+    setStatus("Orientation alternative non disponible");
+    return;
+  }
+  activeDisplayRotation=next;
+  if(orientationPrefsOpen)orientationPrefs.putUChar("rot",activeDisplayRotation);
+  uiInitialized=false;
+  lastDraw=0;
+  Serial.printf("MQTT display flipped: rotation=%u\\n",unsigned(activeDisplayRotation));
+}
 void onKey(uint8_t code,char typed,bool fn,bool shift){
+  if(fn && (code=='o'||code=='O')){flipDisplayOrientation();return;}
   // KEY_FN and other nonprinting modifiers are ignored as standalone keys.
   const bool arrow=code==';'||code==','||code=='.'||code=='/';
   const bool back=code=='`' && (currentPage!=Page::Settings || fn);
@@ -505,7 +549,7 @@ void drawHome(){
     drawText(titles[i],x+37,y+11,selected?accent[i]:C_WHITE,selected?C_PANEL:C_BAR);
     drawText(subs[i],x+37,y+23,C_MUTED,selected?C_PANEL:C_BAR);
   }
-  drawFooter("FLECHES: choix | ENTER ouvrir | FN+1 chat");
+  drawFooter("FLECHES choix | ENTER | FN+O ecran");
 }
 void drawChat(){
   auto &d=M5Cardputer.Display;
@@ -614,7 +658,7 @@ void drawUi(){
       case Page::Network:drawTopBar("ETAT RESEAU");break;
       case Page::Settings:drawTopBar("REGLAGES");break;
     }
-  }else if(currentPage!=Page::Home && currentPage!=Page::Network){
+  }else if(currentPage!=Page::Home){
     // Small-area clear, never blank the entire display on text/status updates.
     d.fillRect(0,23,240,99,C_BG);
   }
@@ -752,12 +796,14 @@ void serviceNetworkEvents(){
   sendQueued();
 }
 void setup(){
-  M5Cardputer.begin();M5Cardputer.Display.setRotation(1);
+  Serial.begin(115200);
+  M5Cardputer.begin();
+  configureDisplayOrientation();
   // Important: never let Arduino's Wi-Fi library persist station credentials.
   // Both Wi-Fi and MQTT credentials are loaded exclusively from microSD.
   // Call before WiFi.mode()/WiFi.begin() and before any reconnection attempt.
   WiFi.persistent(false);
-  Serial.begin(115200);delay(200);
+  delay(200);
   SPI.begin(SD_SCK,SD_MISO,SD_MOSI,SD_CS);
   sdOK=SD.begin(SD_CS,SPI,20000000);
   if(sdOK){
