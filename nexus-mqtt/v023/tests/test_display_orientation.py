@@ -13,8 +13,9 @@ class DisplayOrientationChecks(unittest.TestCase):
         self.assertIn("configureDisplayOrientation();", CPP)
 
     def test_orientation_saved_and_flipped(self):
-        self.assertIn('orientationPrefs.getUChar("rot",1)', CPP)
-        self.assertIn('orientationPrefs.putUChar("rot",activeDisplayRotation)', CPP)
+        self.assertIn('SD.open("/mqtt/display.cfg",FILE_READ)', CPP)
+        self.assertIn('SD.rename("/mqtt/display.tmp","/mqtt/display.cfg")', CPP)
+        self.assertNotIn('Preferences', CPP)
         self.assertIn("const uint8_t next=(activeDisplayRotation+2)&3;", CPP)
         self.assertIn("if(fn && (code=='o'||code=='O'))", CPP)
 
