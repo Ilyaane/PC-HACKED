@@ -107,6 +107,7 @@ String searchQuery,searchViewBody;
 struct VoiceArchive {uint32_t id=0; String sender,stamp,path;};
 VoiceArchive voiceArchives[VOICE_LIST_MAX];
 bool fullRepaint=true;
+uint8_t activeDisplayRotation=1;
 struct History {uint32_t id=0; String sender,kind,body;};
 History history[HISTORY_CAP];
 uint8_t historySize=0;
@@ -329,7 +330,7 @@ void paint(){
  display.startWrite();
  static bool firstFrame=true;
  static View lastView=View::HOME;
- fullRepaint=firstFrame || lastView!=view;
+ fullRepaint=fullRepaint || firstFrame || lastView!=view;
  firstFrame=false;lastView=view;
  switch(view){
  case View::HOME:drawHome();break;
@@ -532,7 +533,7 @@ void paint(){
    if(sdReady){const uint64_t t=SD.totalBytes(),u=SD.usedBytes();
      free="Libre: "+String((uint32_t)((t>u?t-u:0)/(1024*1024)))+" Mio";
      total="Total: "+String((uint32_t)(t/(1024*1024)))+" Mio";}
-   drawLines("STOCKAGE ET VERSION","NEXUS NEON MORSE V2 BETA",free,total,
+   drawLines("STOCKAGE ET VERSION","NEON ADV / correction affichage",free,total,
      "Code conserve en NVS", "OPT : retour");break;}
  case View::DELETE_CONFIRM:drawLines("EFFACER WI-FI?", "ENTREE: oublier le reseau", "ESC: ne rien effacer");break;
 #if NEXUS_NEON_VOICE
@@ -540,8 +541,47 @@ void paint(){
  #endif // NEXUS_NEON_VOICE
  }
  display.endWrite();
+ fullRepaint=false;
 }
 void changeView(View v){view=v;paint();}
+// Verify actual display dimensions; do not assume every M5GFX revision
+// returns the same landscape rotation on Cardputer ADV.
+static bool useLandscapeRotation(uint8_t rotation){
+ auto& display=M5Cardputer.Display;
+ display.setRotation(rotation & 3);
+ return display.width()==240 && display.height()==135;
+}
+void configureDisplayOrientation(){
+ const uint8_t requested=prefsReady?(prefs.getUChar("rot",1)&3):1;
+ const uint8_t choices[]={requested,1,3,0,2};
+ bool valid=false;
+ for(uint8_t rotation:choices){
+  if(useLandscapeRotation(rotation)){
+   activeDisplayRotation=rotation;valid=true;break;
+  }
+ }
+ if(!valid){
+  M5Cardputer.Display.setRotation(1);
+  Serial.println("NEXUS display error: no 240x135 rotation");
+ }
+ Serial.printf("NEXUS display: rotation=%u size=%d x %d\n",
+  unsigned(activeDisplayRotation),int(M5Cardputer.Display.width()),
+  int(M5Cardputer.Display.height()));
+}
+void flipDisplayOrientation(){
+ const uint8_t next=(activeDisplayRotation+2)&3;
+ if(!useLandscapeRotation(next)){
+  useLandscapeRotation(activeDisplayRotation);
+  setStatus("Sens d'ecran non disponible");
+  return;
+ }
+ activeDisplayRotation=next;
+ if(prefsReady && prefs.putUChar("rot",next)!=1)
+  setStatus("Sens ecran actif, sauvegarde NVS impossible");
+ fullRepaint=true;
+ paint();
+}
+
 bool saveSetting(const char* key, const String& value){
   if(!prefsReady){storageFault=true;setStatus("MEMOIRE NVS indisponible");return false;}
   prefs.putString(key,value);
@@ -1768,6 +1808,12 @@ void handleInput(){
   static String lastChord="";
   if(!M5Cardputer.Keyboard.isPressed()){lastChord="";return;}
   const auto k=M5Cardputer.Keyboard.keysState();
+  if(k.fn && (M5Cardputer.Keyboard.isKeyPressed('o') || M5Cardputer.Keyboard.isKeyPressed('O'))){
+   if(lastChord=="FN+O")return;
+   lastChord="FN+O";
+   flipDisplayOrientation();
+   return;
+  }
   // M5Cardputer 1.1.1 has only fn/opt/del/enter and printable keys.
   const bool escPressed=k.opt || (k.fn && M5Cardputer.Keyboard.isKeyPressed('`'));
   const bool upPressed=M5Cardputer.Keyboard.isKeyPressed(';');
@@ -2051,8 +2097,9 @@ void handleInput(){
 } // namespace
 void setup(){
  Serial.begin(115200);auto cfg=M5.config();M5Cardputer.begin(cfg,true);
- M5Cardputer.Display.setRotation(1);
- loadSettings();initSd();paint();
+ loadSettings();
+ configureDisplayOrientation();
+ initSd();paint();
  netReplyQueue=xQueueCreate(1,sizeof(NetReply*));
  WiFi.mode(WIFI_STA);WiFi.setAutoReconnect(true);
  if(!wifiSsid.isEmpty())beginWifiAsync(wifiSsid,wifiPass,true);
