@@ -27,6 +27,7 @@ std::atomic<bool> stopWorker{false}, workerFinished{true};
 static const char *CONFIG_FILE="/mqtt/config.ini";
 static const char *CA_FILE="/mqtt/ca.pem";
 static const char *HISTORY_FILE="/mqtt/history.jsonl";
+static const char *OLD_HISTORY_FILE="/mqtt/history.old.jsonl";
 static const char *OUTBOX_FILE="/mqtt/outbox.jsonl";
 static const char *OUTBOX_TMP="/mqtt/outbox.tmp";
 static const char *OUTBOX_BAK="/mqtt/outbox.bak";
@@ -184,8 +185,8 @@ void logHistory(const Message &m){
     File chk=SD.open(HISTORY_FILE,FILE_READ);
     size_t sz=chk?chk.size():0;if(chk)chk.close();
     if(sz>HISTORY_LIMIT){
-      SD.remove("/mqtt/history.old.jsonl");
-      SD.rename(HISTORY_FILE,"/mqtt/history.old.jsonl");
+      SD.remove(OLD_HISTORY_FILE);
+      SD.rename(HISTORY_FILE,OLD_HISTORY_FILE);
     }
   }
   File f=SD.open(HISTORY_FILE,FILE_APPEND);
@@ -194,9 +195,8 @@ void logHistory(const Message &m){
   doc["text"]=m.text;doc["ts"]=m.timestamp;
   serializeJson(doc,f);f.println();f.close();
 }
-void loadHistory(){
-  if(!sdOK)return;
-  File f=SD.open(HISTORY_FILE,FILE_READ);if(!f)return;
+void loadHistoryFile(const char* path){
+  File f=SD.open(path,FILE_READ);if(!f)return;
   if(f.size()>16384){
     f.seek(f.size()-16384);
     f.readStringUntil('\n'); // skip truncated first record
@@ -208,9 +208,14 @@ void loadHistory(){
     Message m;
     m.id=d["id"].as<String>();m.from=d["from"].as<String>();
     m.text=d["text"].as<String>();m.timestamp=d["ts"]|0u;
-    if(m.id.length() && m.text.length()<=MAX_TEXT)keepRecent(m);
+    if(m.id.length() && m.text.length()<=MAX_TEXT && !alreadySeen(m.id))keepRecent(m);
   }
   f.close();
+}
+void loadHistory(){
+  if(!sdOK)return;
+  loadHistoryFile(OLD_HISTORY_FILE);
+  loadHistoryFile(HISTORY_FILE);
 }
 bool queueOutbox(const String &text){
   if(!sdOK||text.isEmpty()||text.length()>MAX_TEXT)return false;
@@ -227,27 +232,28 @@ bool queueOutbox(const String &text){
   if(serializeJson(d,f)==0){f.close();return false;}
   f.println();f.close();logHistory(m);keepRecent(m);return true;
 }
-void removeFirstOutboxLine(){
-  File src=SD.open(OUTBOX_FILE,FILE_READ);if(!src)return;
+bool removeFirstOutboxLine(){
+  File src=SD.open(OUTBOX_FILE,FILE_READ);if(!src)return false;
   SD.remove(OUTBOX_TMP);
-  File dst=SD.open(OUTBOX_TMP,FILE_WRITE);if(!dst){src.close();return;}
+  File dst=SD.open(OUTBOX_TMP,FILE_WRITE);if(!dst){src.close();return false;}
   src.readStringUntil('\n');
   while(src.available()){
     uint8_t buf[256];size_t n=src.read(buf,sizeof(buf));
-    if(n && dst.write(buf,n)!=n){src.close();dst.close();SD.remove(OUTBOX_TMP);return;}
+    if(n && dst.write(buf,n)!=n){src.close();dst.close();SD.remove(OUTBOX_TMP);return false;}
   }
   src.close();dst.close();
   // Two-phase SD update: on restart, if the active file is missing,
   // restore the original .bak and resend; QoS1 may duplicate, IDs deduplicate.
   SD.remove(OUTBOX_BAK);
   if(!SD.rename(OUTBOX_FILE,OUTBOX_BAK)){
-    SD.remove(OUTBOX_TMP);setStatus("Erreur rotation file");return;
+    SD.remove(OUTBOX_TMP);setStatus("Erreur rotation file");return false;
   }
   if(!SD.rename(OUTBOX_TMP,OUTBOX_FILE)){
     SD.rename(OUTBOX_BAK,OUTBOX_FILE);
-    setStatus("Erreur sauvegarde file");return;
+    setStatus("Erreur sauvegarde file");return false;
   }
   SD.remove(OUTBOX_BAK);
+  return true;
 }
 // SD and outbox operations only happen in the UI task, never concurrently with TLS.
 void sendQueued(){
@@ -668,7 +674,7 @@ void drawUi(){
   if(newPage){
     d.fillScreen(C_BG);
     switch(currentPage){
-      case Page::Home:drawTopBar("MQTT KVX / 10NOV");break;
+      case Page::Home:drawTopBar("MQTT KVX / 11NOV");break;
       case Page::Chat:drawTopBar("MESSAGES");break;
       case Page::History:drawTopBar("HISTORIQUE");break;
       case Page::Detail:drawTopBar("LIRE MESSAGE");break;
@@ -829,7 +835,10 @@ void serviceNetworkEvents(bool shuttingDown=false){
     NetAck ack{};
     if(xQueueReceive(netAckQueue,&ack,0)==pdPASS){
       txWaiting=false;
-      if(ack.ok){removeFirstOutboxLine();setStatus("Publication MQTT acquittee");}
+      if(ack.ok){
+        if(removeFirstOutboxLine())setStatus("Publication MQTT acquittee");
+        else setStatus("Acquittee, file SD non mise a jour");
+      }
       else setStatus("Envoi en attente");
     }
   }

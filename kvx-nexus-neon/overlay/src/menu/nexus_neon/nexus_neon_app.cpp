@@ -395,7 +395,7 @@ void drawHome() {
     tft.setTextColor(0x0000,a);
     tft.drawString("N",10,6,1);
     tft.setTextColor(0xFFFF,0x080F);
-    tft.drawString("NEXUS V10 / 10NOV",28,7,1);
+    tft.drawString("NEXUS V10 / 11NOV",28,7,1);
     tft.fillRect(0,20,tftWidth,2,a);
     const int x=tftWidth/2, y=62;
     tft.fillRoundRect(x-82,26,164,76,11,d);

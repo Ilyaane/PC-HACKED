@@ -77,7 +77,7 @@ class InstallTests(unittest.TestCase):
         self.assertIn("esc && (key.fn || isFnKeyHeld())", text)
         self.assertIn("key.pressed && !key.fn && key.enter", text)
         self.assertNotIn("key.exit_key", text)
-        self.assertIn("NEXUS V10 / 10NOV", text)
+        self.assertIn("NEXUS V10 / 11NOV", text)
         self.assertNotIn("NexusVoice::", text)
         self.assertNotIn("nexus_voice.h", text)
         self.assertIn("View::WIFI_STATUS", text)
