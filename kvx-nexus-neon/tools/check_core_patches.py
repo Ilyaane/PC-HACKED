@@ -41,7 +41,7 @@ require('drawTopBar("MQTT KVX / 10NOV")' in mqtt,"Visible KVX MQTT corrected bui
 require('largestHeap=heap_caps_get_largest_free_block' in mqtt,"Show contiguous RAM in MQTT")
 require('mqtt.disconnect();tls.stop();' in mqtt,"TLS resources reclaimed on failure")
 require('if(currentPage!=Page::Home)' in mqtt,"Clear stale network fields on redraw")
-require('sDraftAlice' in nexus and 'RAM libre contigue' in nexus,"Nexus role drafts and free-block diagnosis")
+require('sDraftAlice' in nexus and 'Plus grand bloc' in nexus,"Nexus role drafts and free-block diagnosis")
 
 require("revealPassword" not in mqtt,"MQTT does not mask characters")
 require("    mask_input = false;" in content("src/root/input/mykeyboard.cpp"),"KVX keyboard unmasked globally")

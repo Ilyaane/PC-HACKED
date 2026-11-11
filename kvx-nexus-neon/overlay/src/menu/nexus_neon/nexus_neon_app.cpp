@@ -9,6 +9,7 @@
 #include "root/ui/kvx_ui.h"
 #include "root/input/mykeyboard.h"
 #include "root/net/wifi_common.h"
+#include "root/hal/radio_mem.h"
 #include "root/app/utils.h"
 #include <globals.h>
 #include <WiFi.h>
@@ -18,6 +19,7 @@
 #include <ArduinoJson.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include <nvs.h>
 #include <atomic>
 #include <new>
 #include <time.h>
@@ -119,6 +121,10 @@ void doHttp(void *raw) {
     // "busy" state when the network core has no heap left to allocate it.
     rep->generation = req->generation;
     rep->op = req->op;
+    const uint32_t internal = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+    Serial.printf("[Nexus HTTPS] debut libre=%u bloc=%u\n",
+                  (unsigned)heap_caps_get_free_size(internal),
+                  (unsigned)heap_caps_get_largest_free_block(internal));
     if (WiFi.status() != WL_CONNECTED) {
         rep->code = -2;
     } else if (!isConfigured()) {
@@ -136,6 +142,7 @@ void doHttp(void *raw) {
             HTTPClient http;
             client.setCACert(NEXUS_TRUSTED_ROOTS);
             client.setTimeout(5500);
+            client.setHandshakeTimeout(6);
             http.setConnectTimeout(4500);
             http.setTimeout(5500);
             String path = req->op == Op::FETCH
@@ -173,6 +180,10 @@ void doHttp(void *raw) {
             }
         }
     }
+    Serial.printf("[Nexus HTTPS] fin HTTP=%d TLS=%d libre=%u bloc=%u pile=%u\n",
+                  rep->code, rep->tlsError, (unsigned)heap_caps_get_free_size(internal),
+                  (unsigned)heap_caps_get_largest_free_block(internal),
+                  (unsigned)uxTaskGetStackHighWaterMark(nullptr));
     delete req;
     if (!sReplyQueue || xQueueSend(sReplyQueue, &rep, pdMS_TO_TICKS(20)) != pdTRUE) {
         delete rep;
@@ -183,6 +194,7 @@ void doHttp(void *raw) {
 
 bool beginOperation(Op op, const String &payload = "") {
     if (sBusy) return false;
+    tftReleaseFrameCanvas();
     if (!sReplyQueue) {
         sReplyQueue = xQueueCreate(3, sizeof(NetReply *));
         if (!sReplyQueue) { sStatus = "Memoire insuffisante (file)"; return false; }
@@ -501,10 +513,13 @@ void drawStatus() {
     tft.setTextColor(kNeonCyan,kDark);
     tft.drawString(WiFi.status()==WL_CONNECTED?"Wi-Fi: connecte":"Wi-Fi: absent",8,58,1);
     const size_t freeBlock=heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
-    tft.drawString("RAM libre contigue : "+String(freeBlock/1024)+" Ko",8,73,1);
-    if(freeBlock<16384){
-        tft.setTextColor(kNeonGreen,kDark);
-        tft.drawString("Fermer les modules actifs",8,85,1);
+    const size_t freeTotal=heap_caps_get_free_size(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    tft.drawString("RAM interne : "+String(freeTotal/1024)+" Ko libres",8,73,1);
+    tft.drawString("Plus grand bloc : "+String(freeBlock/1024)+" Ko",8,85,1);
+    nvs_stats_t nvs{};
+    if(nvs_get_stats(nullptr,&nvs)==ESP_OK && nvs.total_entries){
+        const unsigned used=(unsigned)(100*nvs.used_entries/nvs.total_entries);
+        tft.drawString("NVS : "+String(used)+" % des entrees",8,96,1);
     }
     tft.setTextColor(kNeonGreen,kDark);
     tft.drawString("ENTREE retour | ESC accueil",8,108,1);
@@ -563,11 +578,11 @@ void newDraft() {
     typed.trim();
     if (typed.isEmpty()) { sStatus = "Message vide : annule"; sDirty = true; return; }
     if (typed.length() > kMaxText) typed = typed.substring(0, kMaxText);
+    // Reopening the same draft must keep its retry ID after an ambiguous send.
+    if(typed!=sDraft)sClientId="";
     sDraft = typed;
-    // A new message must never reuse the idempotency key of an older draft.
-    sClientId = "";
-    if(sRecipient=="bob"){sDraftBob=sDraft;sIdBob="";}
-    else{sDraftAlice=sDraft;sIdAlice="";}
+    if(sRecipient=="bob"){sDraftBob=sDraft;sIdBob=sClientId;}
+    else{sDraftAlice=sDraft;sIdAlice=sClientId;}
     sView = View::CONFIRM;
     sDirty = true;
 }
@@ -616,13 +631,12 @@ void handleKeys(bool &exitApp) {
     // ADV KeyStroke captures FN status at the moment of the key event.
     keyStroke key = _getKeyPress();
     bool esc = pressed(EscPress);
-    if ((key.pressed && key.fn && key.exit_key) ||
-        (esc && isFnKeyHeld())) {
+    if (esc && (key.fn || isFnKeyHeld())) {
         EscPress = false;
         exitApp = true;
         return;
     }
-    if (esc || (key.pressed && key.exit_key)) {
+    if (esc && !(key.pressed && key.enter)) {
         if (sView == View::HOME) return;
         if (sView == View::DETAIL) sView = View::MESSAGES;
         else {
@@ -656,7 +670,8 @@ void handleKeys(bool &exitApp) {
         else if (sView == View::DETAIL && sCount) sSelected = min(sCount - 1, sSelected + 1);
         sDirty = true;
     }
-    if (pressed(SelPress)) {
+    const bool selectFlag=pressed(SelPress);
+    if (selectFlag || (key.pressed && !key.fn && key.enter)) {
         if (sView == View::HOME) handleHomeSelect();
         else if (sView == View::MESSAGES && sCount) sView = View::DETAIL;
         else if (sView == View::CONFIRM) sendDraft();
@@ -706,7 +721,6 @@ void nexusNeonApp() {
     sStatus = isConfigured() ? "FN+ESC: retour KVX" : "Compilation sans jeton";
     sDirty = true;
     sPollAt = millis() + kPollMs;
-    // Do not reset sBusy: a previously launched HTTPS request may still be running.
     EscPress = false; SelPress = false; NextPress = false; PrevPress = false;
     UpPress = false; DownPress = false;
     bool exitApp = false;
@@ -722,7 +736,18 @@ void nexusNeonApp() {
         handleKeys(exitApp);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
-    // Let in-flight HTTPS finish; replies are consumed/dropped by generation on re-entry.
+    if(sBusy.load()){
+        tft.fillScreen(kDark);
+        tft.setTextSize(1);
+        tft.drawCentreString("Nexus : fermeture HTTPS",tftWidth/2,tftHeight/2,1);
+    }
+    while(sBusy.load()){
+        acceptReply();
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+    if(sReplyQueue){vQueueDelete(sReplyQueue);sReplyQueue=nullptr;}
+    for(auto &message : sItems)message={};
+    sCount=0;
     tft.fillScreen(kvxConfig.bgColor);
 #endif
 }

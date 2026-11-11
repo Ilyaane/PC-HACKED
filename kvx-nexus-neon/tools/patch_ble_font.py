@@ -2,7 +2,7 @@
 """Compact KVXputer's shared option menus to the same 1x text as BLE.
 
 Only changes shared menu-list renderers, file lists and regular option dialogs.
-Custom screens and icon artwork are left alone, to avoid clipped diagrams.
+The BLE Spam screens use the same compact typography. Their controls and radio behavior are unchanged.
 Operate on a disposable pinned upstream checkout, not the user's originals.
 """
 from pathlib import Path
@@ -64,3 +64,28 @@ segment = re.sub(r"\bFM\b", "1", segment)
 display = display[:beg] + segment + display[end:]
 display_path.write_text(display, encoding="utf-8")
 print("KVX shared submenus, file lists and regular option dialogs: compact 1x font; custom screens unchanged.")
+
+# The BLE Spam selector, configuration, running view and popups draw their
+# own text outside the shared list renderers. Keep the title and row geometry
+# in sync with the fixed 1x font on these views.
+spam_path = root / "src/menu/ble/ble_spam.cpp"
+spam = spam_path.read_text(encoding="utf-8")
+start = spam.index("static BleSpamListMetrics bleSpamGetListMetrics")
+prefix, screens = spam[:start], spam[start:]
+assert screens.count("drawMainBorderWithTitle(bleSpamMakeTitle(title));") == 5
+assert screens.count("tft.setTextSize(FP);") == 7
+screens = re.sub(r"\b(?:FP|FM)\b", "kBleSpamFont", screens)
+screens = screens.replace(
+    "static String bleSpamMakeTitle(const String &title) {",
+    "static void drawBleSpamTitle(const String &title) {\n"
+    "    drawMainBorder();\n"
+    "    tft.setTextColor(kvxConfig.priColor, kvxConfig.bgColor);",
+)
+screens = screens.replace(
+    "return bleSpamTruncateText(title, maxWidth);",
+    "tft.drawCentreString(bleSpamTruncateText(title, maxWidth), tftWidth / 2, BORDER_PAD_Y, 1);",
+)
+screens = screens.replace(
+    "drawMainBorderWithTitle(bleSpamMakeTitle(title));", "drawBleSpamTitle(title);"
+)
+spam_path.write_text(prefix + "static constexpr int kBleSpamFont = 1;\n\n" + screens, encoding="utf-8")

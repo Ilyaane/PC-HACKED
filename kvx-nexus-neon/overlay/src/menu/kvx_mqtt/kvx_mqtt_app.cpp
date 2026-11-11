@@ -24,7 +24,6 @@
 
 namespace KvxMqtt {
 std::atomic<bool> stopWorker{false}, workerFinished{true};
-TaskHandle_t workerHandle=nullptr;
 static const char *CONFIG_FILE="/mqtt/config.ini";
 static const char *CA_FILE="/mqtt/ca.pem";
 static const char *HISTORY_FILE="/mqtt/history.jsonl";
@@ -41,8 +40,6 @@ struct Config {
 Config beforeSettings; // Snapshot, so cancelling cannot corrupt live settings.
 struct Message { String id, from, text; uint32_t timestamp=0; };
 
-WiFiClientSecure tls;
-MQTTClient mqtt(768,768); // Owned by networkTask, never touched by UI thread.
 String caPem, draft, statusText="Initialisation...", editBuf;
 std::vector<Message> recent;
 bool sdOK=false, inSettings=false, configured=false, pendingReconfigure=false;
@@ -64,6 +61,7 @@ struct NetNotice { char text[64]; char ip[24]; };
 struct NetConfig { String wifiSsid,wifiPass,host,user,pass,id,peer; uint16_t port; } netCfg;
 QueueHandle_t netTxQueue=nullptr,netAckQueue=nullptr,netRxQueue=nullptr,netNoticeQueue=nullptr;
 std::atomic<bool> netWifiUp{false}, netMqttUp{false};
+std::atomic<unsigned> droppedPackets{0};
 bool txWaiting=false;
 String netIp="--";
 uint32_t lastSendAttempt=0,lastDraw=0;
@@ -270,8 +268,8 @@ void onIncoming(String &topic, String &payload){
   if(topic!=topicFor(netCfg.id)||payload.isEmpty()||payload.length()>600)return;
   if(!netRxQueue)return;
   NetPacket p{};memcpy(p.payload,payload.c_str(),payload.length()+1);
-  // A short bounded wait is safer than unbounded blocking in a network callback.
-  xQueueSend(netRxQueue,&p,pdMS_TO_TICKS(100));
+  // Do not block the MQTT parser when the UI queue fills.
+  if(xQueueSend(netRxQueue,&p,0)!=pdPASS)++droppedPackets;
 }
 void processIncoming(const String &payload){
   JsonDocument d;if(deserializeJson(d,payload))return;
@@ -704,7 +702,10 @@ void notifyUi(const char* message,const char* ip=""){
   xQueueOverwrite(netNoticeQueue,&n);
 }
 // All synchronous Wi-Fi / TLS / MQTT calls run here, away from the keyboard.
-void networkTask(void*){
+void runNetworkSession(){
+  WiFiClientSecure tls;
+  MQTTClient mqtt(768,768);
+  tls.setHandshakeTimeout(6);
   uint32_t lastWifiAttempt=millis()-10001,lastMqttAttempt=millis()-8001;
   bool ntpStarted=false;
   uint32_t lastNtpAttempt=0;
@@ -715,7 +716,7 @@ void networkTask(void*){
   mqtt.setOptions(30,false,4000);
   while(!stopWorker.load()){
     const uint32_t now=millis();
-    const bool wifiOk=(WiFi.status()==WL_CONNECTED);
+    const bool wifiOk=WiFi.status()==WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP())!=0;
     if(!wifiOk){
       netWifiUp.store(false);netMqttUp.store(false);
       if(wasWifiUp){
@@ -751,7 +752,12 @@ void networkTask(void*){
       if(now-lastMqttAttempt>8000){
         lastMqttAttempt=now;
         notifyUi("Connexion MQTT TLS...");
-        const String clientId=String("nmqtt-")+netCfg.id;
+        constexpr uint32_t internal=MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT;
+        Serial.printf("[MQTT TLS] debut libre=%u bloc=%u pile=%u\n",
+                      (unsigned)heap_caps_get_free_size(internal),
+                      (unsigned)heap_caps_get_largest_free_block(internal),
+                      (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+        const String clientId=String("nmqtt-")+netCfg.id+"-"+String((uint32_t)ESP.getEfuseMac(),HEX);
         IPAddress brokerIp;
         if(!WiFi.hostByName(netCfg.host.c_str(),brokerIp)){
           notifyUi("MQTT: DNS broker introuvable");
@@ -767,6 +773,9 @@ void networkTask(void*){
           const int err=int(mqtt.lastError());
           char tlsInfo[100]={};
           const int tlsCode=tls.lastError(tlsInfo,sizeof(tlsInfo));
+          Serial.printf("[MQTT TLS] echec erreur=%d code=%d TLS=%d libre=%u bloc=%u\n",
+                        err,rc,tlsCode,(unsigned)heap_caps_get_free_size(internal),
+                        (unsigned)heap_caps_get_largest_free_block(internal));
           String diag=rc==4?"MQTT: identifiants refuses":
                       rc==5?"MQTT: autorisation refusee":
                       err==-3 && tlsCode!=0?
@@ -793,12 +802,16 @@ void networkTask(void*){
     }
     vTaskDelay(pdMS_TO_TICKS(30));
   }
-  mqtt.disconnect(); tls.stop(); netMqttUp.store(false);
-  // Once workerFinished is set, no more queues are accessed by this task.
-  workerFinished.store(true);workerHandle=nullptr;
+  mqtt.disconnect();tls.stop();
+}
+void networkTask(void*){
+  runNetworkSession();
+  netMqttUp.store(false);netWifiUp.store(false);
+  // Session objects have been destroyed before the UI reclaims the queues.
+  workerFinished.store(true);
   vTaskDelete(nullptr);
 }
-void serviceNetworkEvents(){
+void serviceNetworkEvents(bool shuttingDown=false){
   if(netNoticeQueue){
     NetNotice notice{};
     if(xQueueReceive(netNoticeQueue,&notice,0)==pdPASS){
@@ -816,7 +829,7 @@ void serviceNetworkEvents(){
     NetAck ack{};
     if(xQueueReceive(netAckQueue,&ack,0)==pdPASS){
       txWaiting=false;
-      if(ack.ok){removeFirstOutboxLine();setStatus("Message remis au serveur");}
+      if(ack.ok){removeFirstOutboxLine();setStatus("Publication MQTT acquittee");}
       else setStatus("Envoi en attente");
     }
   }
@@ -827,7 +840,9 @@ void serviceNetworkEvents(){
     if(uiInitialized)drawConnectionDots();
     if(currentPage==Page::Network)lastDraw=0;
   }
-  sendQueued();
+  const unsigned lost=droppedPackets.exchange(0);
+  if(lost)setStatus("Reception : "+String(lost)+" msg perdus (file pleine)");
+  if(!shuttingDown)sendQueued();
 }
 void cleanupQueues(){
   if(!workerFinished.load()) return;
@@ -860,16 +875,17 @@ void appStart(){
   else if(!configured){startSettings();setStatus("Configurer MQTT, ENTREE pour modifier");}
   else if(caPem.isEmpty())setStatus("Installer /mqtt/ca.pem (TLS)");
   else{
+    tftReleaseFrameCanvas();
     netCfg={cfg.wifiSsid,cfg.wifiPass,cfg.host,cfg.user,cfg.pass,cfg.id,cfg.peer,cfg.port};
-    netTxQueue=xQueueCreate(2,sizeof(NetPacket));
+    netTxQueue=xQueueCreate(1,sizeof(NetPacket));
     netAckQueue=xQueueCreate(2,sizeof(NetAck));
-    netRxQueue=xQueueCreate(8,sizeof(NetPacket));
+    netRxQueue=xQueueCreate(4,sizeof(NetPacket));
     netNoticeQueue=xQueueCreate(1,sizeof(NetNotice));
     if(!netTxQueue||!netAckQueue||!netRxQueue||!netNoticeQueue)
       setStatus("Memoire insuffisante pour MQTT");
     else{
       workerFinished.store(false);
-      BaseType_t ok=xTaskCreatePinnedToCore(networkTask,"kvx-mqtt-net",12288,nullptr,1,&workerHandle,0);
+      BaseType_t ok=xTaskCreatePinnedToCore(networkTask,"kvx-mqtt-net",12288,nullptr,1,nullptr,0);
       if(ok!=pdPASS){workerFinished.store(true);setStatus("Echec creation tache MQTT");}
     }
   }
@@ -896,9 +912,20 @@ void appService(){
   vTaskDelay(pdMS_TO_TICKS(12));
 }
 void appStop(){
-  // Do not block KVX UI while a DNS/TLS handshake times out in another core.
-  // Worker closes MQTT/TLS and exits; queues are reclaimed on next entry.
   stopWorker.store(true);
+  if(!workerFinished.load()){
+    tft.fillScreen(kvxConfig.bgColor);
+    tft.setTextSize(1);
+    tft.drawCentreString("MQTT : fermeture de la connexion",tftWidth/2,tftHeight/2,1);
+  }
+  while(!workerFinished.load()){
+    serviceNetworkEvents(true);
+    vTaskDelay(pdMS_TO_TICKS(15));
+  }
+  serviceNetworkEvents(true);
+  cleanupQueues();
+  netCfg={};caPem=String();recent.clear();recent.shrink_to_fit();
+  pendingReconfigure=false;
 }
 } // namespace KvxMqtt
 
