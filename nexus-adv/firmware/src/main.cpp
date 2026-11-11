@@ -1891,7 +1891,6 @@ void handleInput(){
   // M5Cardputer 1.1.1 has only fn/opt/del/enter and printable keys.
   const bool escapeKey=M5Cardputer.Keyboard.isKeyPressed('`');
   const bool exitChord=k.fn && escapeKey;
-  const bool escPressed=k.opt || exitChord || (escapeKey && k.word.empty());
   const bool upPressed=M5Cardputer.Keyboard.isKeyPressed(';');
   const bool downPressed=M5Cardputer.Keyboard.isKeyPressed('.');
   const bool leftPressed=M5Cardputer.Keyboard.isKeyPressed(',');
@@ -1907,6 +1906,7 @@ void handleInput(){
   const bool editing=(view==View::WIFI_PASSWORD || view==View::EDIT_URL ||
     view==View::EDIT_TOKEN || view==View::EDIT_PEER || view==View::COMPOSE ||
     view==View::MORSE_EDIT || view==View::SEARCH_EDIT);
+  const bool escPressed=k.opt || (escapeKey && !editing);
   if(exitChord){changeView(View::HOME);return;}
   // Comma and slash must remain typeable in text, URLs and Wi-Fi passwords.
   if(escPressed || (leftPressed && !editing && view!=View::HISTORY && view!=View::HOME && view!=View::SEARCH_VIEW)){
