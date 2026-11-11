@@ -66,7 +66,7 @@ checks={
  'No letter shortcut menu': "case 't':case 'T'" not in cpp and 'openSectionSelection()' in cpp,
  'Wi-Fi password is visible': 'case View::WIFI_PASSWORD' in cpp and 'shown=input.length()' in cpp,
  'Five saved Wi-Fi slots': 'WIFI_SLOTS=5' in cpp and 'rememberNetwork(' in cpp and 'wifiSlot(' in cpp,
- 'Saved Wi-Fi reused': "scanSaved[selected]" in cpp or "const int saved=wifiSlot(wifiSsid)" in cpp,
+ 'Saved Wi-Fi reused': "scanSaved[selected]" in cpp or "const int saved=wifiSlot(wifiSelectionSsid)" in cpp,
  'Shared code minimum is 10': 'deviceToken.length()>=10' in cpp and 'input.length()<10' in cpp,
  'Device role declared to Worker': 'http.addHeader("X-Nexus-User"' in cpp,
  'Device role linked to recipient': 'recipient=="bob"?"alice":"bob"' in cpp,

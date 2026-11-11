@@ -19,6 +19,7 @@
 #include "nexus_morse.h"
 #endif
 #include <math.h>
+#include <new>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -44,11 +45,14 @@ String pendingTextId, pendingVoiceId;
 String lastSentInfo="";
 uint32_t cursor=0, lastVoiceId=0, lastCheck=0, lastWifiAttempt=0;
 uint32_t pendingReadId=0, draftChangedAt=0;
+const char* cursorKey(){return recipient=="bob"?"cursorAlice":"cursorBob";}
 bool draftDirty=false, wifiScanPending=false;
 uint32_t wifiScanStartedAt=0, wifiAttemptStartedAt=0;
+struct NetReply;
 struct NetRequest {
- enum class Kind { POLL, SEND_TEXT, SEND_VOICE, OUTBOX };
+ enum class Kind { POLL, DIAGNOSTIC, SEND_TEXT, SEND_VOICE, OUTBOX };
  Kind kind=Kind::POLL;
+ NetReply* reply=nullptr;
  String url,token,recipient,payload,text,clientId;
  uint32_t cursor=0,readId=0;
 };
@@ -56,6 +60,7 @@ struct NetReply {
  NetRequest::Kind kind=NetRequest::Kind::POLL;
  int sessionCode=-1,inboxCode=-1,unreadCode=-1,readCode=-1,sendCode=-1,outboxCode=-1;
  String session,inbox,unread,sendResponse,clientId,sentText,recipient,outboxPayload;
+ String diagnostic;
  uint32_t readId=0;
 };
 QueueHandle_t netReplyQueue=nullptr;
@@ -65,7 +70,9 @@ String outgoingText,outgoingRecipient,outgoingId;
 enum class WifiAttempt { NONE, BOOT, USER };
 WifiAttempt wifiAttempt=WifiAttempt::NONE;
 int bootWifiSlot=0;
-String wifiAttemptSsid, wifiAttemptPass, wifiPreviousSsid, wifiPreviousPass;
+String wifiAttemptSsid, wifiAttemptPass, wifiPreviousSsid, wifiPreviousPass, wifiSelectionSsid;
+String diagnosticStatus="Entree : tester HTTPS";
+bool diagnosticPending=false;
 uint32_t unreadCount=0, latestUnreadId=0;
 String latestUnreadPreview, latestUnreadSender;
 bool unreadSynced=false;
@@ -81,7 +88,7 @@ String input;
 String scanNames[24];
 bool scanSaved[24]={}, scanOpen[24]={};
 uint8_t homeIndex=0, configIndex=0, wifiIndex=0, confirmIndex=0;
-constexpr uint8_t HOME_COUNT=6, CONFIG_COUNT=2, WIFI_SLOTS=5;
+constexpr uint8_t HOME_COUNT=6, CONFIG_COUNT=4, WIFI_SLOTS=5;
 bool homeAllowed(uint8_t id) {
 #if !NEXUS_NEON_VOICE
  if(id==1)return false;
@@ -167,11 +174,12 @@ void drawStatusBar(const String& heading){
   d.fillRoundRect(5,3,17,15,4,p.primary);
   d.setTextSize(1);d.setTextColor(0x0000,p.primary);d.setCursor(10,7);d.print("N");
   d.setTextColor(0xFFFF,0x080F);d.setCursor(28,7);d.print(clipped(heading,24));
-  const uint16_t signal=WiFi.status()==WL_CONNECTED?p.shine:0xFDA0;
-  // Small signal, SD and battery indicators.
-  d.fillCircle(191,13,2,signal);
-  d.drawLine(184,8,190,4,signal);d.drawLine(190,4,197,8,signal);
-  d.drawLine(187,10,190,8,signal);d.drawLine(190,8,194,10,signal);
+  if(WiFi.status()==WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP())!=0){
+    constexpr uint16_t signal=0x07E0;
+    d.fillCircle(191,13,2,signal);
+    d.drawLine(184,8,190,4,signal);d.drawLine(190,4,197,8,signal);
+    d.drawLine(187,10,190,8,signal);d.drawLine(190,8,194,10,signal);
+  }
   d.fillRoundRect(203,5,12,10,2,sdReady?p.shine:0x4208);
   d.setTextColor(0x0000,sdReady?p.shine:0x4208);d.setCursor(206,6);d.print("S");
   const int batt=constrain((int)M5Cardputer.Power.getBatteryLevel(),0,100);
@@ -442,19 +450,21 @@ void paint(){
    const String opts[]={"Connecter : "+clipped(wifiSsid,23),"Choisir un autre Wi-Fi","Oublier ce reseau"};
    drawMenu("WI-FI MEMORISE",opts,3,confirmIndex);break;}
  case View::WIFI_LIST: {
-   if(scanCount==0){drawLines("RESEAUX WI-FI",wifiScanPending?"Recherche en cours...":"Aucun reseau trouve","Fn+ESC : retour");break;}
+   if(wifiAttempt==WifiAttempt::USER || scanCount==0){
+     drawLines("RESEAUX WI-FI",clipped(statusLine,36),"ENTREE : rechercher", "ESC : retour");break;
+   }
    String opts[24];
    for(int i=0;i<scanCount;i++)
      opts[i]=String(scanSaved[i]?"[MEM] ":scanOpen[i]?"[LIB] ":"[WPA] ")+clipped(scanNames[i],28);
    drawMenu("RESEAUX  "+String(wifiIndex+1)+"/"+String(scanCount),opts,scanCount,wifiIndex,
-      "MEM=sauve  ;/. + Entree");break;}
+      clipped(statusLine,36));break;}
  case View::WIFI_PASSWORD: {
    const String shown=input.length()>62?input.substring(input.length()-62):input;
-   drawLines("MOT DE PASSE WI-FI","Reseau: "+clipped(wifiSsid,23),
+   drawLines("MOT DE PASSE WI-FI","Reseau: "+clipped(wifiSelectionSsid,23),
        shown.substring(0,31),shown.length()>31?shown.substring(31):"",
        "Entree : connecter et sauver","Fn+ESC : retour");break;}
  case View::CONFIG: {
-   const String opts[]={"Correspondant : "+recipient,"Reseaux Wi-Fi"};
+   const String opts[]={"Correspondant : "+recipient,"Reseaux Wi-Fi","Adresse HTTPS","Jeton serveur"};
    drawMenu("REGLAGES NEXUS",opts,CONFIG_COUNT,configIndex);break;}
  case View::EDIT_URL: {
    const String shown=input.length()>68?input.substring(input.length()-68):input;
@@ -468,7 +478,7 @@ void paint(){
    String tail=editor.length()>66?editor.substring(editor.length()-66):editor;
    drawLines("ECRIRE UN MESSAGE", "Vers: "+recipient,clipped(tail,33),tail.length()>33?clipped(tail.substring(33),33):"", "ENTREE: envoyer", "ESC: menu principal");break;}
  case View::HISTORY: {
-   if(!historySize){drawLines("RECEPTION", "Aucun message en memoire", "P: lire dernier vocal", "ESC: retour");break;}
+   if(!historySize){drawLines("RECEPTION", "Aucun message en memoire", "ESC: retour");break;}
    int i=(int)historySize-1-(int)pageHistory;
    if(i<0)i=0;
    if(history[i].kind=="voice") {
@@ -490,7 +500,7 @@ void paint(){
     "Wi-Fi: "+String(WiFi.status()==WL_CONNECTED?"OK ":"KO ")+clipped(wifiSsid,20),
     "IP: "+WiFi.localIP().toString(),
     "RAM libre: "+String(ESP.getFreeHeap())+" octets",
-    "Serveur: "+String(serverReady?"OK":"NON")+"   NVS: "+String(!prefsReady?"KO":storageFault?"ERR":"OK"),
+    clipped(diagnosticStatus,38),
     "Role: "+String(recipient=="bob"?"ALICE":"BOB")+"  Non lus: "+String(unreadCount));break;
  case View::BATTERY_INFO: {
    const String v=batteryVoltageSmooth>0?String(batteryVoltageSmooth)+" mV":"mesure indisponible";
@@ -626,14 +636,17 @@ void loadSettings(){
   if(!prefsReady){storageFault=true;setStatus("NVS KO: verifier partition flash");return;}
   wifiSsid=prefs.getString("ssid",""); wifiPass=prefs.getString("pwd","");
   if(!wifiSsid.isEmpty() && wifiSlot(wifiSsid)<0)rememberNetwork(wifiSsid,wifiPass); // migrate old NVS
-  serverUrl=String(NEXUS_FIXED_SERVER); deviceToken=String(NEXUS_FIXED_TOKEN); // built in, not NVS
+  serverUrl=prefs.getString("server",NEXUS_FIXED_SERVER);
+  deviceToken=prefs.getString("token",NEXUS_FIXED_TOKEN);
+  if(serverUrl.isEmpty())serverUrl=NEXUS_FIXED_SERVER;
+  if(deviceToken.isEmpty())deviceToken=NEXUS_FIXED_TOKEN;
   recipient=prefs.getString("peer","bob"); editor=prefs.getString("draft","");
   unreadCount=prefs.getUInt("unread",0);unreadSynced=false;
   notificationSound=prefs.getBool("beep",true);
   notifiedMessageId=prefs.getUInt("notified",0u);
   morseWpm=(uint8_t)constrain((int)prefs.getUInt("morsewpm",12u),5,30);
   pendingTextId=prefs.getString("txtid",""); pendingVoiceId=prefs.getString("vocid","");
-  cursor=prefs.getUInt("cursor",0);lastVoiceId=prefs.getUInt("voice",0);
+  cursor=prefs.getUInt(cursorKey(),0);lastVoiceId=prefs.getUInt("voice",0);
 }
 void loadHistory(){
   if(!sdReady)return;
@@ -642,6 +655,8 @@ void loadHistory(){
     String line=f.readStringUntil('\n');line.trim();if(line.isEmpty())continue;
     int a=line.indexOf('|'),b=line.indexOf('|',a+1),c=line.indexOf('|',b+1);
     if(a<=0||b<=a||c<=b)continue;
+    if(line.substring(a+1,b)!=recipient)continue;
+    if(!NEXUS_NEON_VOICE && line.substring(b+1,c)=="voice")continue;
     if(historySize==HISTORY_CAP){for(int k=1;k<HISTORY_CAP;k++)history[k-1]=history[k];historySize--;}
     auto& h=history[historySize++];h.id=line.substring(0,a).toInt();h.sender=line.substring(a+1,b);h.kind=line.substring(b+1,c);h.body=line.substring(c+1);
   }f.close();
@@ -767,7 +782,7 @@ void servicePendingWifi(){
   if(WiFi.status()==WL_CONNECTED && WiFi.SSID()==wifiAttemptSsid){
     const bool boot=wifiAttempt==WifiAttempt::BOOT;
     wifiAttempt=WifiAttempt::NONE;
-    wifiSsid=wifiAttemptSsid;wifiPass=wifiAttemptPass;netReady=true;serverReady=false;
+    wifiSsid=wifiAttemptSsid;wifiPass=wifiAttemptPass;serverReady=false;
     const bool changed=wifiSsid!=wifiPreviousSsid;
     if(!boot || changed){
       const bool ok=saveSetting("pwd",wifiPass) &&
@@ -775,9 +790,7 @@ void servicePendingWifi(){
       setStatus(ok?"Wi-Fi memorise, interface active":"Wi-Fi OK / sauvegarde NVS impossible");
     }else setStatus("Wi-Fi connecte, interface active");
     lastCheck=millis(); // allow loop to run before a background server poll
-    if(!boot && (view==View::WIFI_LIST || view==View::WIFI_PASSWORD || view==View::WIFI_CONFIRM))
-      changeView(View::HOME);
-    else if(view==View::DIAG || view==View::HOME)paint();
+    if(view==View::WIFI_LIST || view==View::WIFI_CONFIRM || view==View::DIAG || view==View::HOME)paint();
     return;
   }
   if(millis()-wifiAttemptStartedAt<9000)return;
@@ -798,8 +811,7 @@ void servicePendingWifi(){
   wifiSsid=wifiPreviousSsid;wifiPass=wifiPreviousPass;
   if(!wifiSsid.isEmpty())WiFi.begin(wifiSsid.c_str(),wifiPass.c_str());
   setStatus("Echec de connexion; ancien Wi-Fi conserve");
-  if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST)
-    changeView(wifiSsid.isEmpty()?View::WIFI_LIST:View::WIFI_CONFIRM);
+  if(view==View::WIFI_LIST || view==View::WIFI_CONFIRM)paint();
 }
 void scanWifi(){
   // Let the user explicitly switch to discovery even during auto-reconnect.
@@ -849,7 +861,8 @@ void wifiSetup(){
 void storeWiFiAfterTest(const String& newPass);
 void chooseWiFi(int selected){
   if(selected<0 || selected>=scanCount)return;
-  wifiSsid=scanNames[selected];const int saved=wifiSlot(wifiSsid);
+  wifiSelectionSsid=scanNames[selected];
+  const int saved=wifiSlot(wifiSelectionSsid);
   if(saved>=0){
     const String pass=prefs.getString(wifiKey(saved,'p').c_str(),"");
     storeWiFiAfterTest(pass);return;
@@ -858,8 +871,7 @@ void chooseWiFi(int selected){
   input="";changeView(View::WIFI_PASSWORD);
 }
 void storeWiFiAfterTest(const String& newPass){
-  // Do not call connectSaved/serverTest here: both block the keyboard.
-  beginWifiAsync(wifiSsid,newPass,false);
+  beginWifiAsync(wifiSelectionSsid,newPass,false);
   changeView(View::WIFI_LIST);
 }
 
@@ -1045,6 +1057,10 @@ void applyInboxPayload(const String& payload){
   for(JsonObject m:messages){
     uint32_t id=m["id"]|0u;if(id<=cursor)continue;
     String sender=m["sender"]|"?",kind=m["kind"]|"?";
+    if(sender!=recipient || (!NEXUS_NEON_VOICE && kind=="voice")){
+      cursor=id;
+      continue;
+    }
     String text=kind=="voice"?"Message vocal #"+String(id):m["text"].as<String>();
     // The message cursor cannot move past a voice before the WAV is on microSD.
     // Failure retries on the next poll instead of silently losing the archive.
@@ -1070,7 +1086,7 @@ void applyInboxPayload(const String& payload){
   }
   // Persist only once after the batch to reduce NVS wear and FULL errors.
   if(sdReady && prefsReady && cursor!=oldCursor){
-    if(prefs.putUInt("cursor",cursor)!=sizeof(uint32_t)){
+    if(prefs.putUInt(cursorKey(),cursor)!=sizeof(uint32_t)){
       storageFault=true;setStatus("NVS pleine: curseur non sauvegarde");
     }
   }
@@ -1091,8 +1107,7 @@ void pollInbox(){
 // and passes immutable completed responses back to the UI through a queue.
 void nexusNetworkWorker(void* argument){
   NetRequest* request=static_cast<NetRequest*>(argument);
-  NetReply* reply=new NetReply();
-  if(!reply){delete request;vTaskDelete(nullptr);return;}
+  NetReply* reply=request->reply;
   reply->readId=request->readId;
   reply->kind=request->kind;
   reply->clientId=request->clientId;
@@ -1107,6 +1122,7 @@ void nexusNetworkWorker(void* argument){
       WiFiClientSecure client;HTTPClient http;
       client.setCACert(NEXUS_TRUSTED_ROOTS);
       client.setTimeout(4500);
+      client.setHandshakeTimeout(6);
       http.setConnectTimeout(3500);http.setTimeout(4500);
       if(!http.begin(client,request->url+path)){status=-1;return;}
       http.addHeader("Authorization","Bearer "+request->token);
@@ -1116,9 +1132,19 @@ void nexusNetworkWorker(void* argument){
         *content=http.getString();
       http.end();
     };
-    if(request->kind==NetRequest::Kind::SEND_TEXT){
+    if(request->kind==NetRequest::Kind::DIAGNOSTIC){
+      const int slash=request->url.indexOf('/',8);
+      const String host=slash<0?request->url.substring(8):request->url.substring(8,slash);
+      const int port=host.indexOf(':');
+      IPAddress ip;
+      if(time(nullptr)<1700000000)reply->diagnostic="HTTPS : horloge non synchronisee";
+      else if(!WiFi.hostByName(port<0?host.c_str():host.substring(0,port).c_str(),ip))
+        reply->diagnostic="DNS : hote introuvable";
+      else networkCall("/session",reply->sessionCode,&reply->session);
+    }else if(request->kind==NetRequest::Kind::SEND_TEXT){
       WiFiClientSecure client;HTTPClient http;
       client.setCACert(NEXUS_TRUSTED_ROOTS);client.setTimeout(5000);
+      client.setHandshakeTimeout(6);
       http.setConnectTimeout(4000);http.setTimeout(5000);
       if(http.begin(client,request->url+"/messages")){
         http.addHeader("Authorization","Bearer "+request->token);
@@ -1129,6 +1155,7 @@ void nexusNetworkWorker(void* argument){
           reply->sendResponse=http.getString();
         http.end();
       }
+#if NEXUS_NEON_VOICE
     }else if(request->kind==NetRequest::Kind::SEND_VOICE){
       File f=SD.open(TX_AUDIO,FILE_READ);
       if(f && f.size()>=44 && f.size()<=MAX_VOICE){
@@ -1147,6 +1174,7 @@ void nexusNetworkWorker(void* argument){
         }
       }else reply->sendCode=-90; // missing or invalid local WAV
       if(f)f.close();
+#endif
     }else if(request->kind==NetRequest::Kind::OUTBOX){
       networkCall("/outbox?after=0",reply->outboxCode,&reply->outboxPayload);
     }else{
@@ -1160,8 +1188,19 @@ void nexusNetworkWorker(void* argument){
     }
   }
   delete request;
-  if(!netReplyQueue || xQueueSend(netReplyQueue,&reply,0)!=pdTRUE)delete reply;
+  xQueueOverwrite(netReplyQueue,&reply);
   vTaskDelete(nullptr);
+}
+bool startNetworkRequest(NetRequest* request,const char* name){
+  request->reply=new (std::nothrow) NetReply();
+  if(request->reply && netReplyQueue &&
+     xTaskCreatePinnedToCore(nexusNetworkWorker,name,12288,request,1,nullptr,0)==pdPASS){
+    netWorkerBusy=true;
+    return true;
+  }
+  delete request->reply;
+  delete request;
+  return false;
 }
 void serviceNetworkReplies(){
   if(!netReplyQueue)return;
@@ -1169,6 +1208,21 @@ void serviceNetworkReplies(){
   if(xQueueReceive(netReplyQueue,&reply,0)!=pdTRUE)return;
   netWorkerBusy=false;
   if(!reply)return;
+  if(reply->kind==NetRequest::Kind::DIAGNOSTIC){
+    diagnosticPending=false;
+    const String expected=recipient=="bob"?"alice":"bob";
+    JsonDocument session;
+    serverReady=reply->recipient==recipient && reply->sessionCode==200 &&
+      !deserializeJson(session,reply->session) && session["ok"]==true && session["user"]==expected;
+    if(serverReady)diagnosticStatus="HTTPS et session : OK";
+    else if(reply->diagnostic.length())diagnosticStatus=reply->diagnostic;
+    else if(WiFi.status()!=WL_CONNECTED)diagnosticStatus="Wi-Fi deconnecte";
+    else if(reply->sessionCode==401 || reply->sessionCode==403)diagnosticStatus="Serveur : jeton ou role refuse";
+    else if(reply->sessionCode==200)diagnosticStatus="Session : reponse invalide";
+    else diagnosticStatus="Echec HTTPS ("+String(reply->sessionCode)+")";
+    if(view==View::DIAG)paint();
+    delete reply;return;
+  }
   if(reply->kind==NetRequest::Kind::OUTBOX){
     JsonDocument doc;
     if(reply->outboxCode==200 && !deserializeJson(doc,reply->outboxPayload)){
@@ -1188,6 +1242,7 @@ void serviceNetworkReplies(){
     if(view==View::SENT)paint();
     delete reply;return;
   }
+  #if NEXUS_NEON_VOICE
   if(reply->kind==NetRequest::Kind::SEND_VOICE){
     voiceUploadBusy=false;
     JsonDocument response;
@@ -1204,6 +1259,7 @@ void serviceNetworkReplies(){
     if(view==View::VOICE_UPLOADING)changeView(View::VOICE_RESULT);
     delete reply;return;
   }
+  #endif
   if(reply->kind==NetRequest::Kind::SEND_TEXT){
     textSending=false;
     JsonDocument response;
@@ -1225,6 +1281,7 @@ void serviceNetworkReplies(){
     }
     delete reply;return;
   }
+  if(reply->recipient!=recipient){delete reply;return;}
   JsonDocument session;
   const String expected=recipient=="bob"?"alice":"bob";
   serverReady=reply->sessionCode==200 && !deserializeJson(session,reply->session)
@@ -1238,17 +1295,34 @@ void serviceNetworkReplies(){
   if(view==View::DIAG)paint();
   delete reply;
 }
+void startDiagnostic(){
+  if(diagnosticPending)return;
+  if(WiFi.status()!=WL_CONNECTED || static_cast<uint32_t>(WiFi.localIP())==0)
+    diagnosticStatus="Wi-Fi : pas de connexion/IP";
+  else if(!configured())diagnosticStatus="Reglages : adresse ou jeton manque";
+  else if(netWorkerBusy)diagnosticStatus="HTTPS occupe : reessayer";
+  else{
+    auto* request=new (std::nothrow) NetRequest();
+    if(request){
+      request->kind=NetRequest::Kind::DIAGNOSTIC;
+      request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
+      diagnosticPending=startNetworkRequest(request,"nexus_diag");
+    }
+    diagnosticStatus=diagnosticPending?"Test HTTPS en cours...":"Tache HTTPS indisponible";
+  }
+  paint();
+}
 void scheduleNetworkPoll(){
   if(netWorkerBusy || textSendQueued || voiceUploadQueued || outboxQueued || wifiScanPending || wifiAttempt!=WifiAttempt::NONE ||
      !netReplyQueue || !configured() || WiFi.status()!=WL_CONNECTED)return;
   if(ESP.getFreeHeap()<35000){setStatus("RAM faible: requete reportee");return;}
-  NetRequest* request=new NetRequest();
+  NetRequest* request=new (std::nothrow) NetRequest();
   if(!request){setStatus("RAM insuffisante");return;}
   request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
   request->cursor=cursor;request->readId=pendingReadId;
   netWorkerBusy=true;
-  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_https",12288,request,1,nullptr,0)!=pdPASS){
-    netWorkerBusy=false;delete request;
+  if(!startNetworkRequest(request,"nexus_https")){
+    netWorkerBusy=false;
     setStatus("Tache HTTPS non disponible");
   }
 }
@@ -1264,13 +1338,13 @@ void refreshSent(){
 void tryStartOutbox(){
   if(!outboxQueued || netWorkerBusy || textSendQueued || voiceUploadQueued)return;
   outboxQueued=false;
-  NetRequest* request=new NetRequest();
+  NetRequest* request=new (std::nothrow) NetRequest();
   if(!request){setStatus("RAM insuffisante pour la liste");return;}
   request->kind=NetRequest::Kind::OUTBOX;
   request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
   netWorkerBusy=true;
-  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_sent",12288,request,1,nullptr,0)!=pdPASS){
-    netWorkerBusy=false;delete request;setStatus("Echec creation de la tache HTTPS");
+  if(!startNetworkRequest(request,"nexus_sent")){
+    netWorkerBusy=false;setStatus("Echec creation de la tache HTTPS");
   }
 }
 
@@ -1289,7 +1363,7 @@ void sendText(){
   if(editor.isEmpty()){setStatus("Ecris un message avant l'envoi");changeView(View::COMPOSE);return;}
   if(!configured()){setStatus("Configurer serveur et jeton");changeView(View::COMPOSE);return;}
   if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi absent : brouillon conserve");changeView(View::COMPOSE);return;}
-  if(textSendQueued){setStatus("Un envoi est deja programme");return;}
+  if(textSendQueued || textSending){setStatus("Un envoi est deja programme");return;}
   if(pendingTextId.isEmpty()){
     const String id=nonce();
     if(!prefsReady){setStatus("NVS indisponible : envoi non securise");changeView(View::COMPOSE);return;}
@@ -1309,7 +1383,7 @@ void tryStartTextSend(){
   if(!textSendQueued || netWorkerBusy)return;
   if(WiFi.status()!=WL_CONNECTED){textSendQueued=false;setStatus("Wi-Fi perdu, texte garde");changeView(View::SEND_RESULT);return;}
   if(ESP.getFreeHeap()<35000){textSendQueued=false;setStatus("RAM insuffisante : texte garde");changeView(View::SEND_RESULT);return;}
-  NetRequest* request=new NetRequest();
+  NetRequest* request=new (std::nothrow) NetRequest();
   if(!request){textSendQueued=false;setStatus("Memoire indisponible");changeView(View::SEND_RESULT);return;}
   request->kind=NetRequest::Kind::SEND_TEXT;
   request->url=serverUrl;request->token=deviceToken;request->recipient=outgoingRecipient;
@@ -1317,8 +1391,8 @@ void tryStartTextSend(){
   JsonDocument payload;payload["to"]=outgoingRecipient;payload["text"]=outgoingText;payload["client_id"]=outgoingId;
   serializeJson(payload,request->payload);
   netWorkerBusy=true;textSendQueued=false;textSending=true;
-  if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_send",12288,request,1,nullptr,0)!=pdPASS){
-    netWorkerBusy=false;textSending=false;delete request;
+  if(!startNetworkRequest(request,"nexus_send")){
+    netWorkerBusy=false;textSending=false;
     setStatus("Tache HTTPS indisponible : reessayer");
     changeView(View::SEND_RESULT);
   }
@@ -1453,14 +1527,14 @@ void tryStartVoiceUpload(){
   voiceUploadQueued=false;
   if(WiFi.status()!=WL_CONNECTED){setStatus("Wi-Fi perdu : vocal conserve");changeView(View::VOICE_RESULT);return;}
   if(ESP.getFreeHeap()<35000){setStatus("RAM faible : vocal conserve");changeView(View::VOICE_RESULT);return;}
-  NetRequest* request=new NetRequest();
+  NetRequest* request=new (std::nothrow) NetRequest();
   if(!request){setStatus("Memoire insuffisante");changeView(View::VOICE_RESULT);return;}
   request->kind=NetRequest::Kind::SEND_VOICE;
   request->url=serverUrl;request->token=deviceToken;request->recipient=recipient;
   request->clientId=pendingVoiceId;
   netWorkerBusy=true;voiceUploadBusy=true;
   if(xTaskCreatePinnedToCore(nexusNetworkWorker,"nexus_voice_tx",12288,request,1,nullptr,0)!=pdPASS){
-    voiceUploadBusy=false;netWorkerBusy=false;delete request;
+    voiceUploadBusy=false;netWorkerBusy=false;
     setStatus("Tache HTTPS indisponible : vocal conserve");
     changeView(View::VOICE_RESULT);
   }
@@ -1815,7 +1889,9 @@ void handleInput(){
    return;
   }
   // M5Cardputer 1.1.1 has only fn/opt/del/enter and printable keys.
-  const bool escPressed=k.opt || (k.fn && M5Cardputer.Keyboard.isKeyPressed('`'));
+  const bool escapeKey=M5Cardputer.Keyboard.isKeyPressed('`');
+  const bool exitChord=k.fn && escapeKey;
+  const bool escPressed=k.opt || exitChord || (escapeKey && k.word.empty());
   const bool upPressed=M5Cardputer.Keyboard.isKeyPressed(';');
   const bool downPressed=M5Cardputer.Keyboard.isKeyPressed('.');
   const bool leftPressed=M5Cardputer.Keyboard.isKeyPressed(',');
@@ -1831,11 +1907,12 @@ void handleInput(){
   const bool editing=(view==View::WIFI_PASSWORD || view==View::EDIT_URL ||
     view==View::EDIT_TOKEN || view==View::EDIT_PEER || view==View::COMPOSE ||
     view==View::MORSE_EDIT || view==View::SEARCH_EDIT);
+  if(exitChord){changeView(View::HOME);return;}
   // Comma and slash must remain typeable in text, URLs and Wi-Fi passwords.
   if(escPressed || (leftPressed && !editing && view!=View::HISTORY && view!=View::HOME && view!=View::SEARCH_VIEW)){
-    if(view==View::WIFI_PASSWORD || view==View::WIFI_LIST || view==View::WIFI_CONFIRM){
-      wifiSsid=prefs.getString("ssid","");wifiPass=prefs.getString("pwd","");
-      changeView(View::HOME);
+    if(view==View::WIFI_PASSWORD){input="";changeView(View::WIFI_LIST);}
+    else if(view==View::WIFI_LIST || view==View::WIFI_CONFIRM){
+      changeView(View::SECTION);
     }else if(view==View::EDIT_URL || view==View::EDIT_TOKEN || view==View::EDIT_PEER){
       input="";changeView(View::CONFIG);
     }else if(view==View::DELETE_CONFIRM){changeView(View::WIFI_CONFIRM);}
@@ -1967,6 +2044,8 @@ void handleInput(){
       switch(configIndex){
         case 0:input=recipient;changeView(View::EDIT_PEER);return;
         case 1:wifiSetup();return;
+        case 2:input=serverUrl;changeView(View::EDIT_URL);return;
+        case 3:input="";changeView(View::EDIT_TOKEN);return;
       }
     }
     if(moved)paint();return;
@@ -1985,6 +2064,7 @@ void handleInput(){
     if(moved)paint();return;
   }
   if(view==View::WIFI_LIST){
+    if(wifiAttempt!=WifiAttempt::NONE || wifiScanPending)return;
     bool moved=false;
     // Enter on an empty/failed scan retries discovery.
     if(!wifiScanPending && !scanCount && k.enter){scanWifi();return;}
@@ -2063,7 +2143,14 @@ void handleInput(){
         if(input!="alice"&&input!="bob")setStatus("Choisir alice ou bob");
         else{
           if(!saveSetting("peer",input)){paint();return;}
-          recipient=input;serverReady=false;setStatus("Correspondant sauvegarde");
+          if(recipient!=input){
+            recipient=input;serverReady=false;pendingReadId=0;
+            cursor=sdReady?prefs.getUInt(cursorKey(),0):0;
+            historySize=0;pageHistory=0;textPage=0;loadHistory();
+            lastSentInfo="";unreadCount=0;unreadSynced=false;
+            diagnosticStatus="Entree : tester HTTPS";
+          }
+          setStatus("Correspondant sauvegarde");
           changeView(View::CONFIG);return;}
       }
       if(view==View::COMPOSE){
@@ -2092,7 +2179,7 @@ void handleInput(){
     if(changed||leftPressed||rightPressed)paint();return;
   }
   if(view==View::SENT){if(choose)refreshSent();return;}
-  if(view==View::DIAG){if(choose){lastCheck=0;setStatus("Test HTTPS programme");scheduleNetworkPoll();paint();}return;}
+  if(view==View::DIAG){if(k.enter)startDiagnostic();return;}
 }
 } // namespace
 void setup(){
@@ -2121,7 +2208,12 @@ void loop(){
 #endif // NEXUS_NEON_VOICE
  tryStartOutbox();
  const uint32_t now=millis();
- if(WiFi.status()!=WL_CONNECTED){
+ const bool wifiConnected=WiFi.status()==WL_CONNECTED && static_cast<uint32_t>(WiFi.localIP())!=0;
+ if(netReady!=wifiConnected){
+   netReady=wifiConnected;
+   paint();
+ }
+ if(!wifiConnected){
    serverReady=false;
    if(wifiAttempt==WifiAttempt::NONE && !wifiScanPending && !netWorkerBusy &&
       !wifiSsid.isEmpty() && now-lastWifiAttempt>20000){
