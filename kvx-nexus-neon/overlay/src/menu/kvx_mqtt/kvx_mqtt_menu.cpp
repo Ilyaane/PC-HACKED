@@ -6,16 +6,17 @@ void KvxMqttMenu::optionsMenu() { kvxMqttApp(); }
 
 void KvxMqttMenu::drawIcon(float scale) {
     clearIconArea();
-    // Distinct MQTT hub: three endpoints joined by a bright triangular route.
-    const int x=iconCenterX,y=iconCenterY,s=(int)(20*scale)+1;
-    const int big=(int)(6*scale)+2,small=(int)(3*scale)+1;
-    tft.drawLine(x,y-s,x-s,y+s/2,kvxConfig.secColor);
-    tft.drawLine(x,y-s,x+s,y+s/2,kvxConfig.secColor);
-    tft.drawLine(x-s,y+s/2,x+s,y+s/2,kvxConfig.priColor);
-    tft.fillCircle(x,y-s,big,kvxConfig.priColor);
-    tft.fillCircle(x-s,y+s/2,big,kvxConfig.secColor);
-    tft.fillCircle(x+s,y+s/2,big,kvxConfig.secColor);
-    tft.fillCircle(x,y-s,small,kvxConfig.bgColor);
-    tft.fillCircle(x-s,y+s/2,small,kvxConfig.bgColor);
-    tft.fillCircle(x+s,y+s/2,small,kvxConfig.bgColor);
+    const int width = static_cast<int>(42 * scale);
+    const int height = static_cast<int>(28 * scale);
+    const int radius = static_cast<int>(6 * scale) + 1;
+    const int x = iconCenterX - width / 2;
+    const int y = iconCenterY - height / 2 - static_cast<int>(3 * scale);
+    const int tailX = x + width / 4;
+    tft.fillTriangle(tailX, y + height - 2, tailX + width / 4, y + height - 2,
+                     tailX, y + height + static_cast<int>(7 * scale), kvxConfig.priColor);
+    tft.fillRoundRect(x, y, width, height, radius, kvxConfig.priColor);
+    for (int dot = -1; dot <= 1; ++dot) {
+        tft.fillCircle(iconCenterX + dot * width / 5, y + height / 2,
+                       static_cast<int>(2 * scale) + 1, kvxConfig.bgColor);
+    }
 }

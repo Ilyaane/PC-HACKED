@@ -1,7 +1,8 @@
-name: KVXputer Cardputer ADV source audit and rebuilt integrated firmware
+name: KVXputer Cardputer ADV MQTT build
 on:
   push:
     branches:
+      - kvx-mqtt-20261112
       - kvx-nexus-neon-text-integration-20261103
       - kvx-plus-audit-stabilite-20261104
       - kvx-nexus-v10-mqtt-v5-20261104
@@ -44,10 +45,8 @@ jobs:
             git -C kvxputer checkout --detach c2ff56f154c35eb13fcfab845fb30dcecf372449
           fi
           test "$(git -C kvxputer rev-parse HEAD)" = "c2ff56f154c35eb13fcfab845fb30dcecf372449"
-      - name: Install Nexus native module and transient server config
-        env:
-          NEXUS_SHARED_TOKEN: ${{ secrets.NEXUS_SHARED_TOKEN }}
-        run: python kvx-nexus-neon/tools/install_overlay.py --kvx kvxputer --nexus .
+      - name: Install the native MQTT module
+        run: python kvx-nexus-neon/tools/install_overlay.py --kvx kvxputer
       - name: Use local web-asset fallback (upstream Toptal endpoint is unreliable)
         run: python kvx-nexus-neon/tools/patch_upstream_minifier.py kvxputer/tools/build/patch.py
       - name: Fix upstream FastLED and apply BLE-size text to all KVX menus
@@ -64,6 +63,7 @@ jobs:
           python kvx-nexus-neon/tools/patch_wifi_session_leases.py kvxputer
           python kvx-nexus-neon/tools/patch_ble_lifecycle_checks.py kvxputer
           python kvx-nexus-neon/tools/patch_ble_snapshot_lifetime.py kvxputer
+          python kvx-nexus-neon/tools/patch_ble_scan_memory.py kvxputer
           python kvx-nexus-neon/tools/patch_clock_persist_immediately.py kvxputer
       - name: Verify patched core integration invariants
         run: python kvx-nexus-neon/tools/check_core_patches.py kvxputer
@@ -74,29 +74,3 @@ jobs:
         run: pio run -e m5stack-cardputer
       - name: Validate app image against partition table
         run: python kvx-nexus-neon/tools/verify_build.py kvxputer
-      # Never publish an unencrypted image: the token is compiled into it.
-      # Encrypt the completed image in CI, then download/decrypt privately.
-      - name: Encrypt validated firmware for private handoff
-        env:
-          NEXUS_SHARED_TOKEN: ${{ secrets.NEXUS_SHARED_TOKEN }}
-        run: |
-          test -n "$NEXUS_SHARED_TOKEN"
-          mkdir -p delivery
-          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 300000 \
-            -in kvxputer/.pio/build/m5stack-cardputer/firmware.bin \
-            -out delivery/KVXputer_NexusV10_MQTTV5.bin.enc \
-            -pass env:NEXUS_SHARED_TOKEN
-          test -s delivery/KVXputer_NexusV10_MQTTV5.bin.enc
-          # Confirm decryptability without ever exposing secret or plaintext.
-          openssl enc -d -aes-256-cbc -pbkdf2 -iter 300000 \
-            -in delivery/KVXputer_NexusV10_MQTTV5.bin.enc \
-            -out /tmp/kvx-roundtrip.bin -pass env:NEXUS_SHARED_TOKEN
-          cmp -s /tmp/kvx-roundtrip.bin kvxputer/.pio/build/m5stack-cardputer/firmware.bin
-          shred -u /tmp/kvx-roundtrip.bin || rm -f /tmp/kvx-roundtrip.bin
-      - name: Upload encrypted image (no plaintext token in public artifact)
-        uses: actions/upload-artifact@v4
-        with:
-          name: KVXputer-NexusV10-MQTTV5-Encrypted
-          path: delivery/KVXputer_NexusV10_MQTTV5.bin.enc
-          retention-days: 1
-          if-no-files-found: error

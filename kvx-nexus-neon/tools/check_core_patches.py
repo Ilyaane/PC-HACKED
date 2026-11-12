@@ -12,7 +12,6 @@ spam=content("src/menu/ble/ble_spam.cpp")
 wifi=content("src/root/net/wifi_common.cpp")
 ui=content("src/root/ui/kvx_ui.cpp")
 display=content("src/root/ui/display.cpp")
-nexus=content("src/menu/nexus_neon/nexus_neon_app.cpp")
 mqtt=content("src/menu/kvx_mqtt/kvx_mqtt_app.cpp")
 
 def require(condition,message):
@@ -25,6 +24,13 @@ require("const int menuTop = 32;" in ble,"BLE Suite compact top")
 require("deviceAddresses.size() >= 64" in ble,"BLE scanner bounded")
 require(ble.count("size_t deviceCount = snapshot->count;") >= 2,"BLE selection size matches snapshot")
 require("std::vector<String>().swap(deviceNames)" in ble,"BLE clear returns capacity")
+scanner=content("src/root/ui/scanner_list.cpp")
+require("new (std::nothrow) ScannerAdvRaw[kAdvRing]" in scanner and
+        "delete[] ring;" in scanner and "ScannerAdvRaw tmp[kAdvRing]" not in scanner,
+        "BLE inbox allocation scoped to the scan")
+suite_menu=ble.split("void BleSuiteMenu() {",1)[1].split("// Attack Execution with Target Selection",1)[0]
+require("while (!forceHome)" in suite_menu and "BLEStateManager::deinitBLE(true);" in suite_menu,
+        "BLE Suite cleanup on both Escape and Home")
 require("BLEStateManager::isBLEActive()" in generic,"generic stop BLE ownership")
 require("BLEDevice::deinit();" in generic,"generic stack cleanup")
 require("wifiCompactNotice(" in wifi,"Wi-Fi status compact")
@@ -36,15 +42,13 @@ require('tft.setTextSize(kKvxMenuFont)' in ui,"shared KVX compact 1x")
 require("uiRowH(1)" in display,"regular option density")
 require("kBleSpamFont = 1" in spam and spam.count("drawBleSpamTitle(title);")==5,
         "deep BLE views use compact titles and rows")
-require("heap_caps_get_largest_free_block" in nexus,"Nexus contiguous heap guard")
 require("sdOK=setupSdCard() && sdcardMounted;" in mqtt,"MQTT lazy SD init")
 require('// Native compact inline editor' in mqtt and 'editBuf.length()<110' in mqtt,"MQTT inline editor without blocking keyboard dialog")
 require("size_t settingsTextOffset=0;" in mqtt,"MQTT long values can be scrolled")
-require('drawTopBar("MQTT KVX / 11NOV")' in mqtt,"Visible KVX MQTT corrected build identifier")
+require('drawTopBar("MQTT KVX / 12NOV")' in mqtt,"Visible KVX MQTT corrected build identifier")
 require('largestHeap=heap_caps_get_largest_free_block' in mqtt,"Show contiguous RAM in MQTT")
 require('mqtt.disconnect();tls.stop();' in mqtt,"TLS resources reclaimed on failure")
 require('if(currentPage!=Page::Home)' in mqtt,"Clear stale network fields on redraw")
-require('sDraftAlice' in nexus and 'Plus grand bloc' in nexus,"Nexus role drafts and free-block diagnosis")
 
 require("revealPassword" not in mqtt,"MQTT does not mask characters")
 require("    mask_input = false;" in content("src/root/input/mykeyboard.cpp"),"KVX keyboard unmasked globally")
@@ -70,5 +74,5 @@ require('persistClockNow(); // NTP time should survive' in content("src/root/app
 
 
 # This quality gate verifies structure, not the physical radio or network.
-print("PASS: BLE scan lifecycle, memory bounds, compact menus, Wi-Fi cancel, MQTT/Nexus integration")
+print("PASS: BLE scan lifecycle, memory bounds, compact menus, Wi-Fi cancel, MQTT integration")
 print("NOTE: no physical RF, TLS or Wi-Fi association tested here")

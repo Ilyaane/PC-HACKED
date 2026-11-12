@@ -21,6 +21,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
+#include <mbedtls/ssl.h>
 
 namespace KvxMqtt {
 std::atomic<bool> stopWorker{false}, workerFinished{true};
@@ -43,6 +44,7 @@ struct Message { String id, from, text; uint32_t timestamp=0; };
 
 String caPem, draft, statusText="Initialisation...", editBuf;
 std::vector<Message> recent;
+bool historyLoaded=false;
 bool sdOK=false, inSettings=false, configured=false, pendingReconfigure=false;
 enum class Page : uint8_t { Home, Chat, History, Detail, Network, Settings };
 Page currentPage=Page::Home;
@@ -59,7 +61,7 @@ uint8_t settingsIdx=0;
 struct NetPacket { char payload[640]; };
 struct NetAck { bool ok; };
 struct NetNotice { char text[64]; char ip[24]; };
-struct NetConfig { String wifiSsid,wifiPass,host,user,pass,id,peer; uint16_t port; } netCfg;
+struct NetConfig { String host,user,pass,id,peer; uint16_t port; } netCfg;
 QueueHandle_t netTxQueue=nullptr,netAckQueue=nullptr,netRxQueue=nullptr,netNoticeQueue=nullptr;
 std::atomic<bool> netWifiUp{false}, netMqttUp{false};
 std::atomic<unsigned> droppedPackets{0};
@@ -213,7 +215,8 @@ void loadHistoryFile(const char* path){
   f.close();
 }
 void loadHistory(){
-  if(!sdOK)return;
+  if(historyLoaded || !sdOK)return;
+  historyLoaded=true;
   loadHistoryFile(OLD_HISTORY_FILE);
   loadHistoryFile(HISTORY_FILE);
 }
@@ -281,6 +284,7 @@ void processIncoming(const String &payload){
   JsonDocument d;if(deserializeJson(d,payload))return;
   String id=d["id"].as<String>(),from=d["from"].as<String>(),text=d["text"].as<String>();
   if(!id.length()||id.length()>80||from!=cfg.peer||text.isEmpty()||text.length()>MAX_TEXT)return;
+  loadHistory();
   if(alreadySeen(id))return;
   Message m; m.id=id;m.from=from;m.text=text;m.timestamp=d["ts"]|0u;
   logHistory(m);keepRecent(m);setStatus("Nouveau message !");lastDraw=0;
@@ -335,7 +339,8 @@ void finishSetting(){
     setStatus("Sauvegarde microSD echouee; ancienne config conservee");
     settingsTextOffset=0;lastDraw=0;return;
   }
-  beforeSettings=cfg;
+  beforeSettings={};
+  editBuf=String();
   pendingReconfigure=true;
   stopWorker.store(true);
   inSettings=false;
@@ -351,6 +356,7 @@ void navigateHistory(int delta){
   scrollPos=(int)recent.size()-1-selectedHistory;
 }
 void openTile(){
+  if(selectedTile<=1)loadHistory();
   if(selectedTile==0)currentPage=Page::Chat;
   if(selectedTile==1){currentPage=Page::History;selectedHistory=recent.empty()?0:recent.size()-1;scrollPos=0;}
   if(selectedTile==2)currentPage=Page::Network;
@@ -379,6 +385,8 @@ void onKey(uint8_t code,char typed,bool fn,bool shift){
     if(code==96 && !fn) {
       // ESC cancels the whole form, not just the visible keyboard widget.
       cfg=beforeSettings;
+      beforeSettings={};
+      editBuf=String();
       inSettings=false;
       currentPage=Page::Home;
       statusText="Reglages annules : valeurs restaurees";
@@ -394,10 +402,10 @@ void onKey(uint8_t code,char typed,bool fn,bool shift){
       if(code=='.' && selectedTile<2)selectedTile+=2;
     }
     if(enter){openTile();changed=true;}
-    if(fn && code=='1'){currentPage=Page::Chat;changed=true;}
+    if(fn && code=='1'){loadHistory();currentPage=Page::Chat;changed=true;}
   }else if(currentPage==Page::Chat){
     if(tab){startSettings();changed=true;}
-    else if(back){if(draft.length())draft="";else currentPage=Page::Home;changed=true;}
+    else if(back){currentPage=Page::Home;changed=true;}
     else if(enter){
       draft.trim();
       if(draft.length() && queueOutbox(draft)){draft="";setStatus("Message sauvegarde");}
@@ -442,11 +450,12 @@ void keyPress(){
   // ADV keyboard is read by the KVXputer input handler. Never start another
   // keyboard scanner, second task, or M5Cardputer instance.
   keyStroke k = _getKeyPress();
-  bool esc=check(EscPress);
-  if ((esc && isFnKeyHeld()) || (k.pressed && k.fn && k.exit_key)) {
+  // The ADV driver sets exit_key on Enter too. Escape comes from EscPress.
+  const bool esc=check(EscPress);
+  if (esc && (isFnKeyHeld() || k.fn)) {
     EscPress=false; returnToMenu=true; return;
   }
-  if(esc || (k.pressed && k.exit_key)) { onKey(96, char(96), false, false); return; }
+  if(esc) { onKey(96, char(96), false, false); return; }
   bool up=check(UpPress), down=check(DownPress), left=check(PrevPress), right=check(NextPress);
   if(currentPage==Page::Settings) {
     // Native compact inline editor: no oversized full-screen keyboard dialog,
@@ -674,7 +683,7 @@ void drawUi(){
   if(newPage){
     d.fillScreen(C_BG);
     switch(currentPage){
-      case Page::Home:drawTopBar("MQTT KVX / 11NOV");break;
+      case Page::Home:drawTopBar("MQTT KVX / 12NOV");break;
       case Page::Chat:drawTopBar("MESSAGES");break;
       case Page::History:drawTopBar("HISTORIQUE");break;
       case Page::Detail:drawTopBar("LIRE MESSAGE");break;
@@ -782,7 +791,10 @@ void runNetworkSession(){
           Serial.printf("[MQTT TLS] echec erreur=%d code=%d TLS=%d libre=%u bloc=%u\n",
                         err,rc,tlsCode,(unsigned)heap_caps_get_free_size(internal),
                         (unsigned)heap_caps_get_largest_free_block(internal));
-          String diag=rc==4?"MQTT: identifiants refuses":
+          const size_t block=heap_caps_get_largest_free_block(internal);
+          String diag=tlsCode==MBEDTLS_ERR_SSL_ALLOC_FAILED?
+                        "TLS RAM -32512 / bloc "+String(block/1024)+" Ko":
+                      rc==4?"MQTT: identifiants refuses":
                       rc==5?"MQTT: autorisation refusee":
                       err==-3 && tlsCode!=0?
                         "MQTT TLS err="+String(tlsCode):
@@ -864,7 +876,8 @@ void appStart(){
   // Single KVX setup(), Wi-Fi service, display, keyboard and SD mount.
   cleanupQueues();
   currentPage=Page::Home;selectedTile=0;selectedHistory=0;scrollPos=0;
-  recent.clear();txWaiting=false;statusText="Initialisation..."; // Keep unsent draft on reentry.
+  recent.clear();recent.shrink_to_fit();historyLoaded=false;
+  txWaiting=false;statusText="Initialisation..."; // Keep unsent draft on reentry.
   uiInitialized=false;lastDraw=0;lastPhysicalKeyMask=0;
   // KVX mounts microSD lazily; without this call config.ini and ca.pem
   // silently fail even when the card is inserted.
@@ -876,7 +889,6 @@ void appStart(){
     if(!SD.exists(OUTBOX_FILE) && SD.exists(OUTBOX_BAK))
       SD.rename(OUTBOX_BAK,OUTBOX_FILE);
     if(SD.exists(OUTBOX_FILE)){SD.remove(OUTBOX_BAK);SD.remove(OUTBOX_TMP);}
-    loadHistory();
   }
   configured=loadConfig();caPem=readCA();
   stopWorker.store(false);workerFinished.store(true);
@@ -885,17 +897,24 @@ void appStart(){
   else if(caPem.isEmpty())setStatus("Installer /mqtt/ca.pem (TLS)");
   else{
     tftReleaseFrameCanvas();
-    netCfg={cfg.wifiSsid,cfg.wifiPass,cfg.host,cfg.user,cfg.pass,cfg.id,cfg.peer,cfg.port};
+    netCfg={cfg.host,cfg.user,cfg.pass,cfg.id,cfg.peer,cfg.port};
     netTxQueue=xQueueCreate(1,sizeof(NetPacket));
     netAckQueue=xQueueCreate(2,sizeof(NetAck));
     netRxQueue=xQueueCreate(4,sizeof(NetPacket));
     netNoticeQueue=xQueueCreate(1,sizeof(NetNotice));
-    if(!netTxQueue||!netAckQueue||!netRxQueue||!netNoticeQueue)
+    if(!netTxQueue||!netAckQueue||!netRxQueue||!netNoticeQueue){
+      cleanupQueues();
       setStatus("Memoire insuffisante pour MQTT");
+    }
     else{
       workerFinished.store(false);
-      BaseType_t ok=xTaskCreatePinnedToCore(networkTask,"kvx-mqtt-net",12288,nullptr,1,nullptr,0);
-      if(ok!=pdPASS){workerFinished.store(true);setStatus("Echec creation tache MQTT");}
+      constexpr uint32_t workerStackBytes=10 * 1024;
+      BaseType_t ok=xTaskCreatePinnedToCore(networkTask,"kvx-mqtt-net",workerStackBytes,nullptr,1,nullptr,0);
+      if(ok!=pdPASS){
+        workerFinished.store(true);
+        cleanupQueues();
+        setStatus("Echec creation tache MQTT");
+      }
     }
   }
   drawUi();lastDraw=millis();
@@ -933,7 +952,8 @@ void appStop(){
   }
   serviceNetworkEvents(true);
   cleanupQueues();
-  netCfg={};caPem=String();recent.clear();recent.shrink_to_fit();
+  netCfg={};caPem=String();beforeSettings={};editBuf=String();
+  recent.clear();recent.shrink_to_fit();
   pendingReconfigure=false;
 }
 } // namespace KvxMqtt
